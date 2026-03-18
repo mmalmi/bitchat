@@ -256,6 +256,74 @@ struct DoubleRatchetIntegrationTests {
         }
     }
 
+    @Test("Inviter send before bootstrap is queued instead of failing with initiator error")
+    func sessionManagerHandle_inviterSendBeforeBootstrap_isQueuedUntilBootstrapArrives() throws {
+        let alice = generateKeypair()
+        let bob = generateKeypair()
+
+        let aliceMgr = try SessionManagerHandle(
+            ourPubkeyHex: alice.publicKeyHex,
+            ourIdentityPrivkeyHex: alice.privateKeyHex,
+            deviceId: "alice-device",
+            ownerPubkeyHex: nil
+        )
+        let bobMgr = try SessionManagerHandle(
+            ourPubkeyHex: bob.publicKeyHex,
+            ourIdentityPrivkeyHex: bob.privateKeyHex,
+            deviceId: "bob-device",
+            ownerPubkeyHex: nil
+        )
+
+        try aliceMgr.`init`()
+        try bobMgr.`init`()
+
+        let aliceInvite = try #require(
+            try aliceMgr.drainEvents().first(where: { $0.kind == "publish_signed" })?.eventJson,
+            "Alice should publish an invite on init"
+        )
+        _ = try bobMgr.drainEvents()
+
+        try bobMgr.processEvent(eventJson: aliceInvite)
+        let bobHandshakePublishes = try bobMgr.drainEvents().compactMap(\.eventJson)
+        let bobResponse = try #require(
+            bobHandshakePublishes.first(where: { (try? extractNostrKind(json: $0)) == 1059 }),
+            "Bob should publish a response after processing Alice invite"
+        )
+        let bobBootstrap = try #require(
+            bobHandshakePublishes.first(where: { (try? extractNostrKind(json: $0)) == 1060 }),
+            "Bob should publish a bootstrap message event after accepting Alice invite"
+        )
+
+        try aliceMgr.processEvent(eventJson: bobResponse)
+        _ = try aliceMgr.drainEvents()
+
+        // Alice is the raw-session non-initiator here. SessionManager should queue instead of throwing.
+        let queued = try aliceMgr.sendText(
+            recipientPubkeyHex: bob.publicKeyHex,
+            text: "queued before bootstrap",
+            expiresAtSeconds: nil
+        )
+        #expect(queued.isEmpty)
+        let aliceBeforeBootstrap = try aliceMgr.drainEvents()
+        #expect(aliceBeforeBootstrap.compactMap(\.eventJson).isEmpty)
+
+        try aliceMgr.processEvent(eventJson: bobBootstrap)
+        let aliceAfterBootstrap = try aliceMgr.drainEvents()
+        let flushed = aliceAfterBootstrap.compactMap(\.eventJson)
+        #expect(try flushed.map { try extractNostrKind(json: $0) }.contains(1060))
+
+        for eventJson in flushed {
+            try bobMgr.processEvent(eventJson: eventJson)
+        }
+
+        let bobInbound = try bobMgr.drainEvents()
+        let decrypted = try #require(
+            bobInbound.first(where: { $0.kind == "decrypted_message" })?.content,
+            "Bob should receive Alice's queued message once bootstrap arrives"
+        )
+        #expect(try innerEventContent(json: decrypted) == "queued before bootstrap")
+    }
+
     private func innerEventContent(json: String) throws -> String {
         let data = Data(json.utf8)
         let obj = try JSONSerialization.jsonObject(with: data, options: [])
