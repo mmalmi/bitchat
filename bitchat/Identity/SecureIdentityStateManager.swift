@@ -157,31 +157,45 @@ final class SecureIdentityStateManager: SecureIdentityStateManagerProtocol {
     
     // Encryption key
     private let encryptionKey: SymmetricKey
+    private let persistenceAvailable: Bool
     
     init(_ keychain: KeychainManagerProtocol) {
         self.keychain = keychain
         
         // Generate or retrieve encryption key from keychain
         let loadedKey: SymmetricKey
+        let persistenceAvailable: Bool
         
-        // Try to load from keychain
-        if let keyData = keychain.getIdentityKey(forKey: encryptionKeyName) {
+        switch keychain.getIdentityKeyWithResult(forKey: encryptionKeyName) {
+        case .success(let keyData):
             loadedKey = SymmetricKey(data: keyData)
+            persistenceAvailable = true
             SecureLogger.logKeyOperation(.load, keyType: "identity cache encryption key", success: true)
-        }
-        // Generate new key if needed
-        else {
+        case .itemNotFound:
             loadedKey = SymmetricKey(size: .bits256)
             let keyData = loadedKey.withUnsafeBytes { Data($0) }
-            // Save to keychain
-            let saved = keychain.saveIdentityKey(keyData, forKey: encryptionKeyName)
-            SecureLogger.logKeyOperation(.generate, keyType: "identity cache encryption key", success: saved)
+            switch keychain.saveIdentityKeyWithResult(keyData, forKey: encryptionKeyName) {
+            case .success, .duplicateItem:
+                persistenceAvailable = true
+                SecureLogger.logKeyOperation(.generate, keyType: "identity cache encryption key", success: true)
+            case .accessDenied, .deviceLocked, .storageFull, .otherError:
+                persistenceAvailable = false
+                SecureLogger.logKeyOperation(.generate, keyType: "identity cache encryption key", success: false)
+                SecureLogger.warning("Identity cache persistence unavailable; using in-memory encryption key", category: .security)
+            }
+        case .accessDenied, .deviceLocked, .authenticationFailed, .otherError:
+            loadedKey = SymmetricKey(size: .bits256)
+            persistenceAvailable = false
+            SecureLogger.warning("Identity cache persistence unavailable at startup; using in-memory encryption key", category: .security)
         }
         
         self.encryptionKey = loadedKey
+        self.persistenceAvailable = persistenceAvailable
         
         // Load identity cache on init
-        loadIdentityCache()
+        if persistenceAvailable {
+            loadIdentityCache()
+        }
     }
     
     deinit {
@@ -191,8 +205,15 @@ final class SecureIdentityStateManager: SecureIdentityStateManagerProtocol {
     // MARK: - Secure Loading/Saving
     
     private func loadIdentityCache() {
-        guard let encryptedData = keychain.getIdentityKey(forKey: cacheKey) else {
+        let encryptedData: Data
+        switch keychain.getIdentityKeyWithResult(forKey: cacheKey) {
+        case .success(let data):
+            encryptedData = data
+        case .itemNotFound:
             // No existing cache, start fresh
+            return
+        case .accessDenied, .deviceLocked, .authenticationFailed, .otherError:
+            SecureLogger.warning("Skipping identity cache load because keychain is unavailable", category: .security)
             return
         }
         
@@ -207,6 +228,7 @@ final class SecureIdentityStateManager: SecureIdentityStateManagerProtocol {
     }
     
     private func saveIdentityCache() {
+        guard persistenceAvailable else { return }
         // Mark that we need to save
         pendingSave = true
         
@@ -220,6 +242,7 @@ final class SecureIdentityStateManager: SecureIdentityStateManagerProtocol {
     }
     
     private func performSave() {
+        guard persistenceAvailable else { return }
         guard pendingSave else { return }
         pendingSave = false
         
@@ -237,6 +260,7 @@ final class SecureIdentityStateManager: SecureIdentityStateManagerProtocol {
     
     // Force immediate save (for app termination)
     func forceSave() {
+        guard persistenceAvailable else { return }
         saveTimer?.invalidate()
         performSave()
     }

@@ -31,7 +31,23 @@ final class FavoritesPersistenceService: ObservableObject {
     @Published private(set) var favorites: [Data: FavoriteRelationship] = [:] // Noise pubkey -> relationship
     @Published private(set) var mutualFavorites: Set<Data> = []
     
-    static let shared = FavoritesPersistenceService()
+    private static var isRunningTestsOrCI: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return NSClassFromString("XCTestCase") != nil ||
+               env["XCTestConfigurationFilePath"] != nil ||
+               env["XCTestBundlePath"] != nil ||
+               env["GITHUB_ACTIONS"] != nil ||
+               env["CI"] != nil
+    }
+
+    /// Singleton used by the app. When running under tests/CI, use an in-memory keychain
+    /// implementation to avoid touching the user's real keychain.
+    static let shared: FavoritesPersistenceService = {
+        if isRunningTestsOrCI {
+            return FavoritesPersistenceService(keychain: InMemoryKeychainManager())
+        }
+        return FavoritesPersistenceService()
+    }()
 
     init(keychain: KeychainManagerProtocol = KeychainManager()) {
         self.keychain = keychain

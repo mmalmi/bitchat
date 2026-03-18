@@ -31,13 +31,18 @@ struct BitchatApp: App {
     init() {
         let keychain = KeychainManager()
         let idBridge = self.idBridge
-        _chatViewModel = StateObject(
-            wrappedValue: ChatViewModel(
-                keychain: keychain,
-                idBridge: idBridge,
-                identityManager: SecureIdentityStateManager(keychain)
-            )
+        let viewModel = ChatViewModel(
+            keychain: keychain,
+            idBridge: idBridge,
+            identityManager: SecureIdentityStateManager(keychain)
         )
+        _chatViewModel = StateObject(
+            wrappedValue: viewModel
+        )
+
+        Task { @MainActor in
+            AppAutomationService.shared.startIfEnabled(chatViewModel: viewModel)
+        }
         
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
         // Warm up georelay directory and refresh if stale (once/day)
@@ -60,6 +65,7 @@ struct BitchatApp: App {
                     }
 
                     appDelegate.chatViewModel = chatViewModel
+                    AppAutomationService.shared.startIfEnabled(chatViewModel: chatViewModel)
 
                     // Initialize network activation policy; will start Tor/Nostr only when allowed
                     NetworkActivationService.shared.start()
@@ -278,4 +284,3 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         completionHandler([.banner, .sound])
     }
 }
-

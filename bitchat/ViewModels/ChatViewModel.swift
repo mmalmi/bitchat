@@ -265,6 +265,7 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
     let meshService: Transport
     let idBridge: NostrIdentityBridge
     let identityManager: SecureIdentityStateManagerProtocol
+    let ndrService: NdrNostrService
     
     var nostrRelayManager: NostrRelayManager?
     private let userDefaults = UserDefaults.standard
@@ -376,6 +377,56 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
     // Throttle verification response toasts per peer to avoid spam
     var lastVerifyToastAt: [String: Date] = [:]
 
+    // MARK: - Double Ratchet Debug State (UI)
+
+    struct NdrOobEventStamp: Equatable {
+        let kind: Int
+        let at: Date
+    }
+
+    struct NdrHandshakeDebugState: Equatable {
+        var lastOobReceived: NdrOobEventStamp?
+        var lastOobSent: NdrOobEventStamp?
+        var lastInviteSentAt: Date?
+        var lastNote: String?
+    }
+
+    struct DoubleRatchetDebugInfo: Equatable {
+        enum HandshakeStatus: String, Equatable {
+            case disabledNotMutual = "DISABLED (not mutual favorites)"
+            case missingPeerNostrKey = "WAITING (peer Nostr key unknown)"
+            case invalidPeerNostrKey = "WAITING (peer Nostr key invalid)"
+            case missingLocalIdentity = "WAITING (local Nostr identity unavailable)"
+            case noSessionYet = "PENDING (no session yet)"
+            case sessionActive = "ACTIVE"
+        }
+
+        var enabled: Bool
+        var status: HandshakeStatus
+        var statusDetail: String?
+
+        var isMutualFavorite: Bool
+        var peerNostrKey: String?
+        var peerPubkeyHex: String?
+        var ourPubkeyHex: String?
+
+        var ndrConfigured: Bool
+        var ndrConfiguredPubkeyHex: String?
+        var ndrFfiVersion: String
+        var ndrInviteCached: Bool
+        var ndrDeviceId: String
+        var ndrOurPubkeyHex: String?
+        var ndrTotalSessions: UInt64?
+        var sessionStateJson: String?
+
+        var lastInviteSentAt: Date?
+        var lastOobReceived: NdrOobEventStamp?
+        var lastOobSent: NdrOobEventStamp?
+        var lastNote: String?
+    }
+
+    @Published private var ndrHandshakeDebugByPeer: [PeerID: NdrHandshakeDebugState] = [:]
+
     // Track which GeoDM messages we've already sent a delivery ACK for (by messageID)
     var sentGeoDeliveryAcks: Set<String> = []
     
@@ -393,13 +444,15 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
     convenience init(
         keychain: KeychainManagerProtocol,
         idBridge: NostrIdentityBridge,
-        identityManager: SecureIdentityStateManagerProtocol
+        identityManager: SecureIdentityStateManagerProtocol,
+        ndrService: NdrNostrService? = nil
     ) {
         self.init(
             keychain: keychain,
             idBridge: idBridge,
             identityManager: identityManager,
-            transport: BLEService(keychain: keychain, idBridge: idBridge, identityManager: identityManager)
+            transport: BLEService(keychain: keychain, idBridge: idBridge, identityManager: identityManager),
+            ndrService: ndrService
         )
     }
 
@@ -410,11 +463,14 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
         keychain: KeychainManagerProtocol,
         idBridge: NostrIdentityBridge,
         identityManager: SecureIdentityStateManagerProtocol,
-        transport: Transport
+        transport: Transport,
+        ndrService: NdrNostrService? = nil
     ) {
+        let resolvedNdrService = ndrService ?? NdrNostrService.shared
         self.keychain = keychain
         self.idBridge = idBridge
         self.identityManager = identityManager
+        self.ndrService = resolvedNdrService
         self.meshService = transport
         self.publicMessagePipeline = PublicMessagePipeline()
         
@@ -431,7 +487,7 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
         self.commandProcessor = CommandProcessor(identityManager: identityManager)
         self.privateChatManager = PrivateChatManager(meshService: meshService)
         self.unifiedPeerService = UnifiedPeerService(meshService: meshService, idBridge: idBridge, identityManager: identityManager)
-        let nostrTransport = NostrTransport(keychain: keychain, idBridge: idBridge)
+        let nostrTransport = NostrTransport(keychain: keychain, idBridge: idBridge, ndrService: resolvedNdrService)
         nostrTransport.senderPeerID = meshService.myPeerID
         self.messageRouter = MessageRouter(transports: [meshService, nostrTransport])
         // Route receipts from PrivateChatManager through MessageRouter
@@ -1569,7 +1625,219 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
             // Update peer manager to refresh UI
             // UnifiedPeerService updates automatically via subscriptions
             }
+
+            // If this update produced a mutual favorite relationship with a currently-connected peer,
+            // bootstrap nostr-double-ratchet over the BLE Noise channel (no Nostr invite publishing).
+            if let connected = unifiedPeerService.peers.first(where: { $0.isConnected && $0.noisePublicKey == peerPublicKey }) {
+                maybeBootstrapDoubleRatchetIfNeeded(for: connected.peerID)
+            }
         }
+    }
+
+    @MainActor
+    private func maybeBootstrapDoubleRatchetIfNeeded(for peerID: PeerID) {
+        guard let peer = unifiedPeerService.getPeer(by: peerID) else { return }
+        guard let relationship = FavoritesPersistenceService.shared.getFavoriteStatus(for: peer.noisePublicKey),
+              relationship.isMutual,
+              let peerNostrKey = relationship.peerNostrPublicKey,
+              let peerPubkeyHex = nostrPubkeyHex(from: peerNostrKey),
+              let currentIdentity = try? idBridge.getCurrentNostrIdentity()
+        else {
+            return
+        }
+
+        ndrService.configureIfNeeded(identity: currentIdentity)
+        if ndrService.hasActiveSession(with: peerPubkeyHex) {
+            return
+        }
+        guard let inviteJson = ndrService.currentInviteEventJson() else {
+            return
+        }
+
+        SecureLogger.debug(
+            "NDR: OOB invite -> \(peerID.id.prefix(8))… peer=\(peerPubkeyHex.prefix(8))…",
+            category: .session
+        )
+        recordNdrOobOutbound(peerID: peerID, eventJson: inviteJson, note: "Invite sent (bootstrap)")
+        meshService.sendNdrEvent(to: peerID, eventJson: inviteJson)
+    }
+
+    /// True when our local nostr-double-ratchet session manager has an active session for this peer.
+    ///
+    /// Notes:
+    /// - Sessions are established out-of-band over BLE (mutual favorites) and then used for Nostr DMs (kind 1060).
+    /// - Returns false if we don't know the peer's Nostr pubkey yet.
+    @MainActor
+    func isDoubleRatchetEnabled(for peerID: PeerID) -> Bool {
+        guard let peer = unifiedPeerService.getPeer(by: peerID) else { return false }
+        let peerNostrKey =
+            peer.nostrPublicKey ??
+            peer.favoriteStatus?.peerNostrPublicKey ??
+            FavoritesPersistenceService.shared.getFavoriteStatus(for: peer.noisePublicKey)?.peerNostrPublicKey
+        guard let peerNostrKey else { return false }
+        guard let peerPubkeyHex = nostrPubkeyHex(from: peerNostrKey) else { return false }
+        guard let currentIdentity = try? idBridge.getCurrentNostrIdentity() else { return false }
+
+        ndrService.configureIfNeeded(identity: currentIdentity)
+        return ndrService.hasActiveSession(with: peerPubkeyHex)
+    }
+
+    @MainActor
+    func doubleRatchetDebugInfo(for peerID: PeerID) -> DoubleRatchetDebugInfo {
+        let ndr = ndrService
+        guard let peer = unifiedPeerService.getPeer(by: peerID) else {
+            return DoubleRatchetDebugInfo(
+                enabled: false,
+                status: .noSessionYet,
+                statusDetail: "Peer not found in UnifiedPeerService",
+                isMutualFavorite: false,
+                peerNostrKey: nil,
+                peerPubkeyHex: nil,
+                ourPubkeyHex: nil,
+                ndrConfigured: ndr.isConfigured,
+                ndrConfiguredPubkeyHex: ndr.configuredPubkeyHex,
+                ndrFfiVersion: ndr.ndrFfiVersion,
+                ndrInviteCached: ndr.currentInviteEventJson() != nil,
+                ndrDeviceId: ndr.debugDeviceId,
+                ndrOurPubkeyHex: ndr.debugOurPubkeyHex,
+                ndrTotalSessions: ndr.debugTotalSessions,
+                sessionStateJson: nil,
+                lastInviteSentAt: nil,
+                lastOobReceived: nil,
+                lastOobSent: nil,
+                lastNote: nil
+            )
+        }
+
+        let relationship = FavoritesPersistenceService.shared.getFavoriteStatus(for: peer.noisePublicKey)
+        let isMutual = relationship?.isMutual == true
+
+        let peerNostrKey = peer.nostrPublicKey ?? relationship?.peerNostrPublicKey
+        let peerPubkeyHex = peerNostrKey.flatMap { nostrPubkeyHex(from: $0) }
+        let currentIdentity = try? idBridge.getCurrentNostrIdentity()
+        let debug = ndrHandshakeDebugByPeer[peerID]
+
+        var enabled = false
+        var sessionStateJson: String?
+        if let identity = currentIdentity, let peerHex = peerPubkeyHex {
+            ndr.configureIfNeeded(identity: identity)
+            enabled = ndr.hasActiveSession(with: peerHex)
+            sessionStateJson = ndr.activeSessionStateJson(with: peerHex)
+        }
+
+        let status: DoubleRatchetDebugInfo.HandshakeStatus
+        let statusDetail: String?
+
+        if enabled {
+            status = .sessionActive
+            if isMutual {
+                statusDetail = "Session is active. Nostr DMs should publish kind=1060."
+            } else {
+                statusDetail = "Session is active, but OOB handshake is currently disabled until mutual favorites."
+            }
+        } else if !isMutual {
+            status = .disabledNotMutual
+            statusDetail = "OOB handshake is exchanged only for mutual favorites over BLE."
+        } else if peerNostrKey == nil {
+            status = .missingPeerNostrKey
+            statusDetail = "Need peer npub/hex to open a session."
+        } else if peerPubkeyHex == nil {
+            status = .invalidPeerNostrKey
+            statusDetail = "Stored peer Nostr key is not a valid npub or 64-hex pubkey."
+        } else if currentIdentity == nil {
+            status = .missingLocalIdentity
+            statusDetail = "Could not load a local Nostr identity."
+        } else {
+            status = .noSessionYet
+            if let last = debug?.lastInviteSentAt {
+                statusDetail = "Invite sent at \(last.formatted(.dateTime.year().month().day().hour().minute().second())). Waiting for response."
+            } else if let received = debug?.lastOobReceived {
+                statusDetail = "Last OOB received: kind=\(received.kind) at \(received.at.formatted(.dateTime.year().month().day().hour().minute().second()))."
+            } else {
+                statusDetail = "No OOB handshake observed yet. Both peers must be mutual favorites and in BLE range at least once."
+            }
+        }
+
+        return DoubleRatchetDebugInfo(
+            enabled: enabled,
+            status: status,
+            statusDetail: statusDetail,
+            isMutualFavorite: isMutual,
+            peerNostrKey: peerNostrKey,
+            peerPubkeyHex: peerPubkeyHex,
+            ourPubkeyHex: currentIdentity?.publicKeyHex,
+            ndrConfigured: ndr.isConfigured,
+            ndrConfiguredPubkeyHex: ndr.configuredPubkeyHex,
+            ndrFfiVersion: ndr.ndrFfiVersion,
+            ndrInviteCached: ndr.currentInviteEventJson() != nil,
+            ndrDeviceId: ndr.debugDeviceId,
+            ndrOurPubkeyHex: ndr.debugOurPubkeyHex,
+            ndrTotalSessions: ndr.debugTotalSessions,
+            sessionStateJson: sessionStateJson,
+            lastInviteSentAt: debug?.lastInviteSentAt,
+            lastOobReceived: debug?.lastOobReceived,
+            lastOobSent: debug?.lastOobSent,
+            lastNote: debug?.lastNote
+        )
+    }
+
+    @MainActor
+    private func recordNdrOobInbound(peerID: PeerID, eventJson: String, note: String? = nil) {
+        let now = Date()
+        let kind = extractNostrKind(json: eventJson)
+        updateNdrDebug(peerID: peerID) { st in
+            if let kind {
+                st.lastOobReceived = NdrOobEventStamp(kind: kind, at: now)
+            }
+            if let note { st.lastNote = note }
+        }
+    }
+
+    @MainActor
+    private func recordNdrOobOutbound(peerID: PeerID, eventJson: String, note: String? = nil) {
+        let now = Date()
+        let kind = extractNostrKind(json: eventJson)
+        updateNdrDebug(peerID: peerID) { st in
+            if let kind {
+                st.lastOobSent = NdrOobEventStamp(kind: kind, at: now)
+                if kind == 30078 {
+                    st.lastInviteSentAt = now
+                }
+            }
+            if let note { st.lastNote = note }
+        }
+    }
+
+    @MainActor
+    private func updateNdrDebug(peerID: PeerID, mutate: (inout NdrHandshakeDebugState) -> Void) {
+        var st = ndrHandshakeDebugByPeer[peerID] ?? NdrHandshakeDebugState()
+        mutate(&st)
+        ndrHandshakeDebugByPeer[peerID] = st
+    }
+
+    private func extractNostrKind(json: String) -> Int? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        guard let obj = try? JSONSerialization.jsonObject(with: data, options: []) else { return nil }
+        guard let dict = obj as? [String: Any] else { return nil }
+        return dict["kind"] as? Int
+    }
+    private func nostrPubkeyHex(from npubOrHex: String) -> String? {
+        if npubOrHex.hasPrefix("npub") {
+            do {
+                let (hrp, data) = try Bech32.decode(npubOrHex)
+                guard hrp == "npub" else { return nil }
+                return data.hexEncodedString()
+            } catch {
+                return nil
+            }
+        }
+
+        // Accept raw hex pubkeys too.
+        let lowered = npubOrHex.lowercased()
+        if lowered.count == 64, lowered.allSatisfy({ $0.isHexDigit }) {
+            return lowered
+        }
+        return nil
     }
     
     // MARK: - App Lifecycle
@@ -1758,7 +2026,7 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
             for message in messages where message.senderPeerID == peerID && !message.isRelay {
                 if !sentReadReceipts.contains(message.id) {
                     SecureLogger.debug("GeoDM: sending READ for mid=\(message.id.prefix(8))… to=\(recipientHex.prefix(8))…", category: .session)
-                    let nostrTransport = NostrTransport(keychain: keychain, idBridge: idBridge)
+                    let nostrTransport = NostrTransport(keychain: keychain, idBridge: idBridge, ndrService: ndrService)
                     nostrTransport.senderPeerID = meshService.myPeerID
                     nostrTransport.sendReadReceiptGeohash(message.id, toRecipientHex: recipientHex, from: id)
                     sentReadReceipts.insert(message.id)
@@ -3169,6 +3437,27 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
                         updateEncryptionStatus(for: peerID)
                     }
                 }
+            case .ndrEvent:
+                // Double Ratchet out-of-band event exchange (invite/response) is allowed only for mutual favorites.
+                guard let eventJson = String(data: payload, encoding: .utf8), !eventJson.isEmpty else { return }
+                recordNdrOobInbound(peerID: peerID, eventJson: eventJson)
+
+                guard let peer = unifiedPeerService.getPeer(by: peerID) else {
+                    updateNdrDebug(peerID: peerID) { $0.lastNote = "Ignored OOB event (peer not found)" }
+                    return
+                }
+                guard FavoritesPersistenceService.shared.isMutualFavorite(peer.noisePublicKey) else {
+                    updateNdrDebug(peerID: peerID) { $0.lastNote = "Ignored OOB event (not mutual favorites)" }
+                    return
+                }
+                guard let currentIdentity = try? idBridge.getCurrentNostrIdentity() else { return }
+
+                ndrService.configureIfNeeded(identity: currentIdentity)
+                let outbound = ndrService.processOutOfBandEventJson(eventJson)
+                for json in outbound {
+                    recordNdrOobOutbound(peerID: peerID, eventJson: json, note: "OOB response sent")
+                    meshService.sendNdrEvent(to: peerID, eventJson: json)
+                }
             }
         }
     }
@@ -3260,6 +3549,9 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
 
             // Flush any queued messages for this peer via router
             messageRouter.flushOutbox(for: peerID)
+
+            // If this is a mutual favorite, bootstrap nostr-double-ratchet out-of-band over BLE.
+            maybeBootstrapDoubleRatchetIfNeeded(for: peerID)
         }
     }
     

@@ -19,6 +19,7 @@ struct NostrTransportTests {
     func reachabilityCacheWarmsFromFavorites() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
+        let ndrService = try makeNdrService(label: "reachability-cache")
         let recipient = try NostrIdentity.generate()
         let noiseKey = Data((0..<32).map(UInt8.init))
         let fullPeerID = PeerID(hexData: noiseKey)
@@ -33,6 +34,7 @@ struct NostrTransportTests {
         let transport = NostrTransport(
             keychain: keychain,
             idBridge: idBridge,
+            ndrService: ndrService,
             dependencies: makeDependencies(
                 loadFavorites: { favorites },
                 favoriteStatusForNoiseKey: { favorites[$0] },
@@ -51,6 +53,7 @@ struct NostrTransportTests {
     func favoriteStatusNotificationRefreshesReachability() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
+        let ndrService = try makeNdrService(label: "favorite-refresh")
         let recipient = try NostrIdentity.generate()
         let noiseKey = Data((32..<64).map(UInt8.init))
         let peerID = PeerID(hexData: noiseKey).toShort()
@@ -60,6 +63,7 @@ struct NostrTransportTests {
         let transport = NostrTransport(
             keychain: keychain,
             idBridge: idBridge,
+            ndrService: ndrService,
             dependencies: makeDependencies(
                 notificationCenter: notificationCenter,
                 loadFavorites: { favorites },
@@ -87,6 +91,7 @@ struct NostrTransportTests {
     func sendPrivateMessageResolvesShortPeerID() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
+        let ndrService = try makeNdrService(label: "private-message")
         let sender = try NostrIdentity.generate()
         let recipient = try NostrIdentity.generate()
         let noiseKey = Data((64..<96).map(UInt8.init))
@@ -100,6 +105,7 @@ struct NostrTransportTests {
         let transport = NostrTransport(
             keychain: keychain,
             idBridge: idBridge,
+            ndrService: ndrService,
             dependencies: makeDependencies(
                 favoriteStatusForNoiseKey: { _ in nil },
                 favoriteStatusForPeerID: { $0 == shortPeerID ? relationship : nil },
@@ -132,6 +138,7 @@ struct NostrTransportTests {
     func sendFavoriteNotificationEmbedsCurrentIdentity() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
+        let ndrService = try makeNdrService(label: "favorite-notification")
         let sender = try NostrIdentity.generate()
         let recipient = try NostrIdentity.generate()
         let noiseKey = Data((96..<128).map(UInt8.init))
@@ -145,6 +152,7 @@ struct NostrTransportTests {
         let transport = NostrTransport(
             keychain: keychain,
             idBridge: idBridge,
+            ndrService: ndrService,
             dependencies: makeDependencies(
                 favoriteStatusForNoiseKey: { $0 == noiseKey ? relationship : nil },
                 favoriteStatusForPeerID: { _ in nil },
@@ -173,6 +181,7 @@ struct NostrTransportTests {
     func sendDeliveryAckEmitsDeliveredAck() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
+        let ndrService = try makeNdrService(label: "delivery-ack")
         let sender = try NostrIdentity.generate()
         let recipient = try NostrIdentity.generate()
         let noiseKey = Data((128..<160).map(UInt8.init))
@@ -186,6 +195,7 @@ struct NostrTransportTests {
         let transport = NostrTransport(
             keychain: keychain,
             idBridge: idBridge,
+            ndrService: ndrService,
             dependencies: makeDependencies(
                 favoriteStatusForNoiseKey: { $0 == noiseKey ? relationship : nil },
                 favoriteStatusForPeerID: { _ in nil },
@@ -215,12 +225,14 @@ struct NostrTransportTests {
     func sendPrivateMessageGeohashRegistersPendingGiftWrap() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
+        let ndrService = try makeNdrService(label: "geohash-pm")
         let sender = try NostrIdentity.generate()
         let recipient = try NostrIdentity.generate()
         let probe = NostrTransportProbe()
         let transport = NostrTransport(
             keychain: keychain,
             idBridge: idBridge,
+            ndrService: ndrService,
             dependencies: makeDependencies(
                 currentIdentity: { sender },
                 registerPendingGiftWrap: probe.recordPendingGiftWrap(id:),
@@ -256,6 +268,7 @@ struct NostrTransportTests {
     func readReceiptQueueThrottlesSequentially() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
+        let ndrService = try makeNdrService(label: "read-queue")
         let sender = try NostrIdentity.generate()
         let recipient = try NostrIdentity.generate()
         let noiseKey = Data((160..<192).map(UInt8.init))
@@ -269,6 +282,7 @@ struct NostrTransportTests {
         let transport = NostrTransport(
             keychain: keychain,
             idBridge: idBridge,
+            ndrService: ndrService,
             dependencies: makeDependencies(
                 favoriteStatusForNoiseKey: { $0 == noiseKey ? relationship : nil },
                 favoriteStatusForPeerID: { _ in nil },
@@ -312,7 +326,8 @@ struct NostrTransportTests {
     func concurrentReadReceiptEnqueue() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
-        let transport = NostrTransport(keychain: keychain, idBridge: idBridge)
+        let ndrService = try makeNdrService(label: "concurrent-read")
+        let transport = NostrTransport(keychain: keychain, idBridge: idBridge, ndrService: ndrService)
         let iterations = 100
 
         await withTaskGroup(of: Void.self) { group in
@@ -335,7 +350,8 @@ struct NostrTransportTests {
     func isPeerReachableThreadSafety() async throws {
         let keychain = MockKeychain()
         let idBridge = NostrIdentityBridge(keychain: keychain)
-        let transport = NostrTransport(keychain: keychain, idBridge: idBridge)
+        let ndrService = try makeNdrService(label: "reachable-thread-safety")
+        let transport = NostrTransport(keychain: keychain, idBridge: idBridge, ndrService: ndrService)
         let iterations = 100
 
         await withTaskGroup(of: Bool.self) { group in
@@ -375,6 +391,16 @@ struct NostrTransportTests {
         )
     }
 
+    @MainActor
+    private func makeNdrService(label: String) throws -> NdrNostrService {
+        let storage = try makeTempDir(label: label)
+        return NdrNostrService(
+            relayManager: FakeRelayManager(),
+            deviceId: "nostr-transport-\(label)",
+            storageDirectoryProvider: { storage }
+        )
+    }
+
     private func makeRelationship(
         peerNoisePublicKey: Data,
         peerNostrPublicKey: String?,
@@ -389,6 +415,15 @@ struct NostrTransportTests {
             favoritedAt: Date(timeIntervalSince1970: 1),
             lastUpdated: Date(timeIntervalSince1970: 2)
         )
+    }
+
+    private func makeTempDir(label: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "bitchat-tests-\(label)-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+        return dir
     }
 
     private func decodeEmbeddedPayload(

@@ -185,13 +185,16 @@ final class KeychainManager: KeychainManagerProtocol {
 
     /// Internal method to retrieve data with detailed result
     private func retrieveDataWithResult(forKey key: String) -> KeychainReadResult {
-        let base: [String: Any] = [
+        var base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        #if os(macOS)
+        base[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        #endif
 
         var result: AnyObject?
         func attempt(withAccessGroup: Bool) -> OSStatus {
@@ -335,13 +338,16 @@ final class KeychainManager: KeychainManagerProtocol {
     
     private func retrieveData(forKey key: String) -> Data? {
         // Base query
-        let base: [String: Any] = [
+        var base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        #if os(macOS)
+        base[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        #endif
 
         var result: AnyObject?
         func attempt(withAccessGroup: Bool) -> OSStatus {

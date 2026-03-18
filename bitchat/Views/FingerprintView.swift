@@ -62,58 +62,155 @@ struct FingerprintView: View {
                 .foregroundColor(textColor)
             }
             .padding()
-            
-            VStack(alignment: .leading, spacing: 16) {
-                // Prefer short mesh ID for session/encryption status
-                let statusPeerID = viewModel.getShortIDForNoiseKey(peerID)
-                // Resolve a friendly name
-                let peerNickname: String = {
-                    if let p = viewModel.getPeer(byID: statusPeerID) { return p.displayName }
-                    if let name = viewModel.meshService.peerNickname(peerID: statusPeerID) { return name }
-                    if let data = peerID.noiseKey {
-                        if let fav = FavoritesPersistenceService.shared.getFavoriteStatus(for: data), !fav.peerNickname.isEmpty { return fav.peerNickname }
-                        let fp = data.sha256Fingerprint()
-                        if let social = viewModel.identityManager.getSocialIdentity(for: fp) {
-                            if let pet = social.localPetname, !pet.isEmpty { return pet }
-                            if !social.claimedNickname.isEmpty { return social.claimedNickname }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Prefer short mesh ID for session/encryption status
+                    let statusPeerID = viewModel.getShortIDForNoiseKey(peerID)
+                    // Resolve a friendly name
+                    let peerNickname: String = {
+                        if let p = viewModel.getPeer(byID: statusPeerID) { return p.displayName }
+                        if let name = viewModel.meshService.peerNickname(peerID: statusPeerID) { return name }
+                        if let data = peerID.noiseKey {
+                            if let fav = FavoritesPersistenceService.shared.getFavoriteStatus(for: data), !fav.peerNickname.isEmpty { return fav.peerNickname }
+                            let fp = data.sha256Fingerprint()
+                            if let social = viewModel.identityManager.getSocialIdentity(for: fp) {
+                                if let pet = social.localPetname, !pet.isEmpty { return pet }
+                                if !social.claimedNickname.isEmpty { return social.claimedNickname }
+                            }
+                        }
+                        return Strings.unknownPeer()
+                    }()
+                    // Accurate encryption state based on short ID session
+                    let encryptionStatus = viewModel.getEncryptionStatus(for: statusPeerID)
+                    let drInfo = viewModel.doubleRatchetDebugInfo(for: statusPeerID)
+
+                    HStack {
+                        if let icon = encryptionStatus.icon {
+                            Image(systemName: icon)
+                                .font(.bitchatSystem(size: 20))
+                                .foregroundColor(encryptionStatus == .noiseVerified ? Color.green : textColor)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(peerNickname)
+                                .font(.bitchatSystem(size: 18, weight: .semibold, design: .monospaced))
+                                .foregroundColor(textColor)
+
+                            Text(encryptionStatus.description)
+                                .font(.bitchatSystem(size: 12, design: .monospaced))
+                                .foregroundColor(textColor.opacity(0.7))
+                        }
+
+                        Spacer()
+                    }
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+
+                    // Double Ratchet (Nostr DM) debug
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Double Ratchet (Nostr)")
+                                .font(.bitchatSystem(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundColor(textColor.opacity(0.7))
+
+                            Spacer()
+
+                            Text(drInfo.enabled ? "Y" : "N")
+                                .font(.bitchatSystem(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundColor(drInfo.enabled ? Color.green : Color.orange)
+                        }
+
+                        Text(drInfo.status.rawValue)
+                            .font(.bitchatSystem(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(textColor)
+
+                        if let detail = drInfo.statusDetail, !detail.isEmpty {
+                            Text(detail)
+                                .font(.bitchatSystem(size: 11, design: .monospaced))
+                                .foregroundColor(textColor.opacity(0.7))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        debugRow("Mutual favorite", drInfo.isMutualFavorite ? "Y" : "N")
+                        debugRow("Peer npub/hex", drInfo.peerNostrKey ?? "unknown", copy: drInfo.peerNostrKey)
+                        debugRow("Peer pubkey hex", drInfo.peerPubkeyHex ?? "unknown", copy: drInfo.peerPubkeyHex)
+                        debugRow("Our pubkey hex", drInfo.ourPubkeyHex ?? "unknown", copy: drInfo.ourPubkeyHex)
+                        debugRow("Invite cached", drInfo.ndrInviteCached ? "Y" : "N")
+                        debugRow("Last invite", drInfo.lastInviteSentAt.map { $0.formatted(.dateTime.year().month().day().hour().minute().second()) } ?? "never")
+                        debugRow("Last OOB recv", drInfo.lastOobReceived.map { "kind=\($0.kind) @ \($0.at.formatted(.dateTime.year().month().day().hour().minute().second()))" } ?? "never")
+                        debugRow("Last OOB sent", drInfo.lastOobSent.map { "kind=\($0.kind) @ \($0.at.formatted(.dateTime.year().month().day().hour().minute().second()))" } ?? "never")
+                        debugRow("ndr-ffi", drInfo.ndrFfiVersion)
+                        debugRow("NDR deviceId", drInfo.ndrDeviceId, copy: drInfo.ndrDeviceId)
+                        debugRow("NDR sessions", drInfo.ndrTotalSessions.map { String($0) } ?? "n/a")
+
+                        if let note = drInfo.lastNote, !note.isEmpty {
+                            debugRow("Note", note, copy: note, singleLine: false)
+                        }
+
+                        if let sessionJson = drInfo.sessionStateJson, !sessionJson.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Active session JSON")
+                                    .font(.bitchatSystem(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundColor(textColor.opacity(0.7))
+
+                                Text(sessionJson)
+                                    .font(.bitchatSystem(size: 10, design: .monospaced))
+                                    .foregroundColor(textColor)
+                                    .textSelection(.enabled)
+                                    .lineLimit(10)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.gray.opacity(0.1))
+                                    .cornerRadius(8)
+                                    .contextMenu {
+                                        Button(Strings.copy) { copyToClipboard(sessionJson) }
+                                    }
+                            }
                         }
                     }
-                    return Strings.unknownPeer()
-                }()
-                // Accurate encryption state based on short ID session
-                let encryptionStatus = viewModel.getEncryptionStatus(for: statusPeerID)
-                
-                HStack {
-                    if let icon = encryptionStatus.icon {
-                        Image(systemName: icon)
-                            .font(.bitchatSystem(size: 20))
-                            .foregroundColor(encryptionStatus == .noiseVerified ? Color.green : textColor)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(peerNickname)
-                            .font(.bitchatSystem(size: 18, weight: .semibold, design: .monospaced))
-                            .foregroundColor(textColor)
-                        
-                        Text(encryptionStatus.description)
-                            .font(.bitchatSystem(size: 12, design: .monospaced))
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+
+                    // Their fingerprint
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(Strings.theirFingerprint)
+                            .font(.bitchatSystem(size: 12, weight: .bold, design: .monospaced))
                             .foregroundColor(textColor.opacity(0.7))
+
+                        if let fingerprint = viewModel.getFingerprint(for: statusPeerID) {
+                            Text(formatFingerprint(fingerprint))
+                                .font(.bitchatSystem(size: 14, design: .monospaced))
+                                .foregroundColor(textColor)
+                                .multilineTextAlignment(.leading)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding()
+                                .frame(maxWidth: .infinity)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(8)
+                                .contextMenu {
+                                    Button(Strings.copy) { copyToClipboard(fingerprint) }
+                                }
+                        } else {
+                            Text(Strings.handshakePending)
+                                .font(.bitchatSystem(size: 14, design: .monospaced))
+                                .foregroundColor(Color.orange)
+                                .padding()
+                        }
                     }
-                    
-                    Spacer()
-                }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(8)
-                
-                // Their fingerprint
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(Strings.theirFingerprint)
-                        .font(.bitchatSystem(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(textColor.opacity(0.7))
-                    
-                    if let fingerprint = viewModel.getFingerprint(for: statusPeerID) {
-                        Text(formatFingerprint(fingerprint))
+
+                    // My fingerprint
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(Strings.yourFingerprint)
+                            .font(.bitchatSystem(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(textColor.opacity(0.7))
+
+                        let myFingerprint = viewModel.getMyFingerprint()
+                        Text(formatFingerprint(myFingerprint))
                             .font(.bitchatSystem(size: 14, design: .monospaced))
                             .foregroundColor(textColor)
                             .multilineTextAlignment(.leading)
@@ -124,120 +221,107 @@ struct FingerprintView: View {
                             .background(Color.gray.opacity(0.1))
                             .cornerRadius(8)
                             .contextMenu {
-                                Button(Strings.copy) {
-                                    #if os(iOS)
-                                    UIPasteboard.general.string = fingerprint
-                                    #else
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(fingerprint, forType: .string)
-                                    #endif
+                                Button(Strings.copy) { copyToClipboard(myFingerprint) }
+                            }
+                    }
+
+                    // Verification status
+                    if encryptionStatus == .noiseSecured || encryptionStatus == .noiseVerified {
+                        let isVerified = encryptionStatus == .noiseVerified
+
+                        VStack(spacing: 12) {
+                            Text(isVerified ? Strings.verifiedBadge : Strings.notVerifiedBadge)
+                                .font(.bitchatSystem(size: 14, weight: .bold, design: .monospaced))
+                                .foregroundColor(isVerified ? Color.green : Color.orange)
+                                .frame(maxWidth: .infinity)
+
+                            Group {
+                                if isVerified {
+                                    Text(Strings.verifiedMessage)
+                                } else {
+                                    Text(Strings.verifyHint(peerNickname))
                                 }
                             }
-                    } else {
-                        Text(Strings.handshakePending)
-                            .font(.bitchatSystem(size: 14, design: .monospaced))
-                            .foregroundColor(Color.orange)
-                            .padding()
-                    }
-                }
+                                .font(.bitchatSystem(size: 12, design: .monospaced))
+                                .foregroundColor(textColor.opacity(0.7))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity)
 
-                // My fingerprint
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(Strings.yourFingerprint)
-                        .font(.bitchatSystem(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(textColor.opacity(0.7))
-                    
-                    let myFingerprint = viewModel.getMyFingerprint()
-                    Text(formatFingerprint(myFingerprint))
-                        .font(.bitchatSystem(size: 14, design: .monospaced))
-                        .foregroundColor(textColor)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(Color.gray.opacity(0.1))
-                        .cornerRadius(8)
-                        .contextMenu {
-                            Button(Strings.copy) {
-                                #if os(iOS)
-                                UIPasteboard.general.string = myFingerprint
-                                #else
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(myFingerprint, forType: .string)
-                                #endif
-                            }
-                        }
-                }
-                
-                // Verification status
-                if encryptionStatus == .noiseSecured || encryptionStatus == .noiseVerified {
-                    let isVerified = encryptionStatus == .noiseVerified
-                    
-                    VStack(spacing: 12) {
-                        Text(isVerified ? Strings.verifiedBadge : Strings.notVerifiedBadge)
-                            .font(.bitchatSystem(size: 14, weight: .bold, design: .monospaced))
-                            .foregroundColor(isVerified ? Color.green : Color.orange)
-                            .frame(maxWidth: .infinity)
-                        
-                        Group {
-                            if isVerified {
-                                Text(Strings.verifiedMessage)
+                            if !isVerified {
+                                Button(action: {
+                                    viewModel.verifyFingerprint(for: peerID)
+                                    dismiss()
+                                }) {
+                                    Text(Strings.markVerified)
+                                        .font(.bitchatSystem(size: 14, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 10)
+                                        .background(Color.green)
+                                        .cornerRadius(8)
+                                }
+                                .buttonStyle(PlainButtonStyle())
                             } else {
-                                Text(Strings.verifyHint(peerNickname))
+                                Button(action: {
+                                    viewModel.unverifyFingerprint(for: peerID)
+                                    dismiss()
+                                }) {
+                                    Text(Strings.removeVerification)
+                                        .font(.bitchatSystem(size: 14, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 10)
+                                        .background(Color.red)
+                                        .cornerRadius(8)
+                                }
+                                .buttonStyle(PlainButtonStyle())
                             }
                         }
-                            .font(.bitchatSystem(size: 12, design: .monospaced))
-                            .foregroundColor(textColor.opacity(0.7))
-                            .multilineTextAlignment(.center)
-                            .lineLimit(nil)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity)
-                        
-                        if !isVerified {
-                            Button(action: {
-                                viewModel.verifyFingerprint(for: peerID)
-                                dismiss()
-                            }) {
-                                Text(Strings.markVerified)
-                                    .font(.bitchatSystem(size: 14, weight: .bold, design: .monospaced))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 10)
-                                    .background(Color.green)
-                                    .cornerRadius(8)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                        } else {
-                            Button(action: {
-                                viewModel.unverifyFingerprint(for: peerID)
-                                dismiss()
-                            }) {
-                                Text(Strings.removeVerification)
-                                    .font(.bitchatSystem(size: 14, weight: .bold, design: .monospaced))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 10)
-                                    .background(Color.red)
-                                    .cornerRadius(8)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                        }
+                        .padding(.top)
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding(.top)
-                    .frame(maxWidth: .infinity)
                 }
+                .padding()
+                .frame(maxWidth: 500) // Constrain max width for better readability
             }
-            .padding()
-            .frame(maxWidth: 500) // Constrain max width for better readability
-            
-            Spacer()
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(backgroundColor)
     }
-    
+
+    @ViewBuilder
+    private func debugRow(_ key: String, _ value: String, copy: String? = nil, singleLine: Bool = true) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(key)
+                .font(.bitchatSystem(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(textColor.opacity(0.7))
+
+            Spacer()
+
+            Text(value)
+                .font(.bitchatSystem(size: 11, design: .monospaced))
+                .foregroundColor(textColor)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(singleLine ? 1 : nil)
+                .truncationMode(.middle)
+                .contextMenu {
+                    Button(Strings.copy) { copyToClipboard(copy ?? value) }
+                }
+        }
+    }
+
+    private func copyToClipboard(_ text: String) {
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+
     private func formatFingerprint(_ fingerprint: String) -> String {
         // Convert to uppercase and format into 4 lines (4 groups of 4 on each line)
         let uppercased = fingerprint.uppercased()

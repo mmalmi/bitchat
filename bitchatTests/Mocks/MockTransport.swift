@@ -40,6 +40,7 @@ final class MockTransport: Transport {
     private(set) var cancelledTransfers: [String] = []
     private(set) var sentVerifyChallenges: [(peerID: PeerID, noiseKeyHex: String, nonceA: Data)] = []
     private(set) var sentVerifyResponses: [(peerID: PeerID, noiseKeyHex: String, nonceA: Data)] = []
+    private(set) var sentNdrEvents: [(peerID: PeerID, eventJson: String)] = []
     private(set) var startServicesCallCount = 0
     private(set) var stopServicesCallCount = 0
     private(set) var emergencyDisconnectCallCount = 0
@@ -161,6 +162,14 @@ final class MockTransport: Transport {
         sentVerifyResponses.append((peerID, noiseKeyHex, nonceA))
     }
 
+    /// Optional hook used by end-to-end tests to deliver out-of-band ndr handshake events to another transport.
+    var ndrEventDelivery: ((PeerID, String) -> Void)?
+
+    func sendNdrEvent(to peerID: PeerID, eventJson: String) {
+        sentNdrEvents.append((peerID, eventJson))
+        ndrEventDelivery?(peerID, eventJson)
+    }
+
     // MARK: - Test Helpers
 
     /// Clears all recorded method calls for fresh assertions
@@ -175,6 +184,7 @@ final class MockTransport: Transport {
         cancelledTransfers.removeAll()
         sentVerifyChallenges.removeAll()
         sentVerifyResponses.removeAll()
+        sentNdrEvents.removeAll()
         startServicesCallCount = 0
         stopServicesCallCount = 0
         emergencyDisconnectCallCount = 0

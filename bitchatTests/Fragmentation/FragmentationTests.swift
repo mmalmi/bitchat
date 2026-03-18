@@ -209,10 +209,10 @@ extension FragmentationTests {
         private var expectedPublicMessageCount: Int = 0
         private var expectedReceivedMessageCount: Int = 0
 
-        private func withLock<T>(_ body: () -> T) -> T {
+        private func withLock<T>(_ body: () throws -> T) rethrows -> T {
             lock.lock()
             defer { lock.unlock() }
-            return body()
+            return try body()
         }
 
         var publicMessages: [(peerID: PeerID, nickname: String, content: String)] {
@@ -224,33 +224,25 @@ extension FragmentationTests {
         }
 
         func didReceiveMessage(_ message: BitchatMessage) {
-            lock.lock()
-            _receivedMessages.append(message)
-            let count = _receivedMessages.count
-            let expected = expectedReceivedMessageCount
-            let continuation = receivedMessageContinuation
-            lock.unlock()
+            let (count, expected, continuation) = withLock { () -> (Int, Int, CheckedContinuation<Void, Never>?) in
+                _receivedMessages.append(message)
+                return (_receivedMessages.count, expectedReceivedMessageCount, receivedMessageContinuation)
+            }
 
             if count >= expected, let cont = continuation {
-                lock.lock()
-                receivedMessageContinuation = nil
-                lock.unlock()
+                withLock { receivedMessageContinuation = nil }
                 cont.resume()
             }
         }
 
         func didReceivePublicMessage(from peerID: PeerID, nickname: String, content: String, timestamp: Date, messageID: String?) {
-            lock.lock()
-            _publicMessages.append((peerID, nickname, content))
-            let count = _publicMessages.count
-            let expected = expectedPublicMessageCount
-            let continuation = publicMessageContinuation
-            lock.unlock()
+            let (count, expected, continuation) = withLock { () -> (Int, Int, CheckedContinuation<Void, Never>?) in
+                _publicMessages.append((peerID, nickname, content))
+                return (_publicMessages.count, expectedPublicMessageCount, publicMessageContinuation)
+            }
 
             if count >= expected, let cont = continuation {
-                lock.lock()
-                publicMessageContinuation = nil
-                lock.unlock()
+                withLock { publicMessageContinuation = nil }
                 cont.resume()
             }
         }

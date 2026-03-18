@@ -223,6 +223,7 @@
 				B1D9136AA0083366353BFA2F /* P256K */,
 				A6E3E5712E7703760032EA8A /* BitLogger */,
 				A6E3EA802E7706A80032EA8A /* Tor */,
+				NDRF0002000000000000000000 /* NdrFfi */,
 			);
 			productName = bitchat_macOS;
 			productReference = 8F3A7C058C2C8E1A06C8CF8B /* bitchat.app */;
@@ -303,6 +304,7 @@
 				4EB6BA1B8464F1EA38F4E286 /* P256K */,
 				A6E3E56F2E77036A0032EA8A /* BitLogger */,
 				A6E3EA7E2E7706720032EA8A /* Tor */,
+				NDRF0003000000000000000000 /* NdrFfi */,
 			);
 			productName = bitchat_iOS;
 			productReference = 96D0D41CA19EE5A772AA8434 /* bitchat.app */;
@@ -344,6 +346,7 @@
 				B8C407587481BBB190741C93 /* XCRemoteSwiftPackageReference "swift-secp256k1" */,
 				A6E3E56E2E77036A0032EA8A /* XCLocalSwiftPackageReference "localPackages/BitLogger" */,
 				A6E3EA7D2E7706720032EA8A /* XCLocalSwiftPackageReference "localPackages/Arti" */,
+				NDRF0001000000000000000000 /* XCLocalSwiftPackageReference "localPackages/NdrFfi" */,
 			);
 			preferredProjectObjectVersion = 90;
 			projectDirPath = "";
@@ -915,6 +918,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = localPackages/Arti;
 		};
+		NDRF0001000000000000000000 /* XCLocalSwiftPackageReference "localPackages/NdrFfi" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = localPackages/NdrFfi;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -954,6 +961,14 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B8C407587481BBB190741C93 /* XCRemoteSwiftPackageReference "swift-secp256k1" */;
 			productName = P256K;
+		};
+		NDRF0002000000000000000000 /* NdrFfi */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NdrFfi;
+		};
+		NDRF0003000000000000000000 /* NdrFfi */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NdrFfi;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

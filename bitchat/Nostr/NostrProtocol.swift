@@ -40,7 +40,7 @@ struct NostrProtocol {
         )
         
         // 2. Create ephemeral key for this message
-        let ephemeralKey = try P256K.Schnorr.PrivateKey()
+        let ephemeralKey = try P256KLock.withLock { try P256K.Schnorr.PrivateKey() }
         // Created ephemeral key for seal
         
         // 3. Seal the rumor (encrypt to recipient)
@@ -202,7 +202,7 @@ struct NostrProtocol {
         let sealJSON = try seal.jsonString()
         
         // Create new ephemeral key for gift wrap
-        let wrapKey = try P256K.Schnorr.PrivateKey()
+        let wrapKey = try P256KLock.withLock { try P256K.Schnorr.PrivateKey() }
         // Creating gift wrap with ephemeral key
         
         // Encrypt the seal with the new ephemeral key (not the seal's key)
@@ -357,60 +357,62 @@ struct NostrProtocol {
         publicKey: Data
     ) throws -> Data {
         // Deriving shared secret
-        
-        // Convert Schnorr private key to KeyAgreement private key
-        let keyAgreementPrivateKey = try P256K.KeyAgreement.PrivateKey(
-            dataRepresentation: privateKey.dataRepresentation
-        )
-        
-        // Create KeyAgreement public key from the public key data
-        // For ECDH, we need the full 33-byte compressed public key (with 0x02 or 0x03 prefix)
-        var fullPublicKey = Data()
-        if publicKey.count == 32 { // X-only key, need to add prefix
-            // For x-only keys in Nostr/Bitcoin, we need to try both possible Y coordinates
-            // First try with even Y (0x02 prefix)
-            fullPublicKey.append(0x02)
-            fullPublicKey.append(publicKey)
-            // Trying with even Y coordinate
-        } else {
-            fullPublicKey = publicKey
-        }
-        
-        // Try to create public key, if it fails with even Y, try odd Y
-        let keyAgreementPublicKey: P256K.KeyAgreement.PublicKey
-        do {
-            keyAgreementPublicKey = try P256K.KeyAgreement.PublicKey(
-                dataRepresentation: fullPublicKey,
-                format: .compressed
+        // swift-secp256k1 (P256K) uses shared global state underneath; serialize all entrypoints.
+        return try P256KLock.withLock {
+            // Convert Schnorr private key to KeyAgreement private key
+            let keyAgreementPrivateKey = try P256K.KeyAgreement.PrivateKey(
+                dataRepresentation: privateKey.dataRepresentation
             )
-        } catch {
-            if publicKey.count == 32 {
-                // Try with odd Y (0x03 prefix)
-                // Even Y failed, trying odd Y
-                fullPublicKey = Data()
-                fullPublicKey.append(0x03)
+
+            // Create KeyAgreement public key from the public key data
+            // For ECDH, we need the full 33-byte compressed public key (with 0x02 or 0x03 prefix)
+            var fullPublicKey = Data()
+            if publicKey.count == 32 { // X-only key, need to add prefix
+                // For x-only keys in Nostr/Bitcoin, we need to try both possible Y coordinates
+                // First try with even Y (0x02 prefix)
+                fullPublicKey.append(0x02)
                 fullPublicKey.append(publicKey)
+                // Trying with even Y coordinate
+            } else {
+                fullPublicKey = publicKey
+            }
+
+            // Try to create public key, if it fails with even Y, try odd Y
+            let keyAgreementPublicKey: P256K.KeyAgreement.PublicKey
+            do {
                 keyAgreementPublicKey = try P256K.KeyAgreement.PublicKey(
                     dataRepresentation: fullPublicKey,
                     format: .compressed
                 )
-            } else {
-                throw error
+            } catch {
+                if publicKey.count == 32 {
+                    // Try with odd Y (0x03 prefix)
+                    // Even Y failed, trying odd Y
+                    fullPublicKey = Data()
+                    fullPublicKey.append(0x03)
+                    fullPublicKey.append(publicKey)
+                    keyAgreementPublicKey = try P256K.KeyAgreement.PublicKey(
+                        dataRepresentation: fullPublicKey,
+                        format: .compressed
+                    )
+                } else {
+                    throw error
+                }
             }
+
+            // Perform ECDH
+            let sharedSecret = try keyAgreementPrivateKey.sharedSecretFromKeyAgreement(
+                with: keyAgreementPublicKey,
+                format: .compressed
+            )
+
+            // Convert SharedSecret to Data
+            let sharedSecretData = sharedSecret.withUnsafeBytes { Data($0) }
+            // ECDH shared secret derived
+
+            // Return raw ECDH shared secret; HKDF is applied by deriveNIP44V2Key
+            return sharedSecretData
         }
-        
-        // Perform ECDH
-        let sharedSecret = try keyAgreementPrivateKey.sharedSecretFromKeyAgreement(
-            with: keyAgreementPublicKey,
-            format: .compressed
-        )
-        
-        // Convert SharedSecret to Data
-        let sharedSecretData = sharedSecret.withUnsafeBytes { Data($0) }
-        // ECDH shared secret derived
-        
-        // Return raw ECDH shared secret; HKDF is applied by deriveNIP44V2Key
-        return sharedSecretData
     }
     
     // Direct version that doesn't try to add prefixes
@@ -419,29 +421,32 @@ struct NostrProtocol {
         publicKey: Data
     ) throws -> Data {
         // Direct shared secret calculation
-        
-        // Convert Schnorr private key to KeyAgreement private key
-        let keyAgreementPrivateKey = try P256K.KeyAgreement.PrivateKey(
-            dataRepresentation: privateKey.dataRepresentation
-        )
-        
-        // Use the public key as-is (should already have prefix)
-        let keyAgreementPublicKey = try P256K.KeyAgreement.PublicKey(
-            dataRepresentation: publicKey,
-            format: .compressed
-        )
-        
-        // Perform ECDH
-        let sharedSecret = try keyAgreementPrivateKey.sharedSecretFromKeyAgreement(
-            with: keyAgreementPublicKey,
-            format: .compressed
-        )
-        
-        // Convert SharedSecret to Data
-        let sharedSecretData = sharedSecret.withUnsafeBytes { Data($0) }
-        
-        // Return raw ECDH shared secret; HKDF is applied by deriveNIP44V2Key
-        return sharedSecretData
+
+        // swift-secp256k1 (P256K) uses shared global state underneath; serialize all entrypoints.
+        return try P256KLock.withLock {
+            // Convert Schnorr private key to KeyAgreement private key
+            let keyAgreementPrivateKey = try P256K.KeyAgreement.PrivateKey(
+                dataRepresentation: privateKey.dataRepresentation
+            )
+
+            // Use the public key as-is (should already have prefix)
+            let keyAgreementPublicKey = try P256K.KeyAgreement.PublicKey(
+                dataRepresentation: publicKey,
+                format: .compressed
+            )
+
+            // Perform ECDH
+            let sharedSecret = try keyAgreementPrivateKey.sharedSecretFromKeyAgreement(
+                with: keyAgreementPublicKey,
+                format: .compressed
+            )
+
+            // Convert SharedSecret to Data
+            let sharedSecretData = sharedSecret.withUnsafeBytes { Data($0) }
+
+            // Return raw ECDH shared secret; HKDF is applied by deriveNIP44V2Key
+            return sharedSecretData
+        }
     }
     
     private static func randomizedTimestamp() -> Date {
@@ -514,12 +519,18 @@ struct NostrEvent: Codable {
         let (eventId, eventIdHash) = try calculateEventId()
         
         // Sign with Schnorr (BIP-340)
-        var messageBytes = [UInt8](eventIdHash)
+        let messageBytes = [UInt8](eventIdHash)
         var auxRand = [UInt8](repeating: 0, count: 32)
         _ = auxRand.withUnsafeMutableBytes { ptr in
             SecRandomCopyBytes(kSecRandomDefault, 32, ptr.baseAddress!)
         }
-        let schnorrSignature = try key.signature(message: &messageBytes, auxiliaryRand: &auxRand)
+
+        // swift-secp256k1 (P256K) uses shared global state underneath; serialize all entrypoints.
+        let schnorrSignature = try P256KLock.withLock {
+            var msg = messageBytes
+            var aux = auxRand
+            return try key.signature(message: &msg, auxiliaryRand: &aux)
+        }
         
         let signatureHex = schnorrSignature.dataRepresentation.hexEncodedString()
         
@@ -537,16 +548,19 @@ struct NostrEvent: Codable {
               let pubData = Data(hexString: pubkey),
               sigData.count == 64,
               pubData.count == 32,
-              let signature = try? P256K.Schnorr.SchnorrSignature(dataRepresentation: sigData),
               let (expectedId, eventHash) = try? calculateEventId(),
               expectedId == id
         else {
             return false
         }
 
-        var messageBytes = [UInt8](eventHash)
-        let xonly = P256K.Schnorr.XonlyKey(dataRepresentation: pubData)
-        return xonly.isValid(signature, for: &messageBytes)
+        // swift-secp256k1 (P256K) uses shared global state underneath; serialize all entrypoints.
+        return (try? P256KLock.withLock {
+            let signature = try P256K.Schnorr.SchnorrSignature(dataRepresentation: sigData)
+            var messageBytes = [UInt8](eventHash)
+            let xonly = P256K.Schnorr.XonlyKey(dataRepresentation: pubData)
+            return xonly.isValid(signature, for: &messageBytes)
+        }) ?? false
     }
     
     private func calculateEventId() throws -> (String, Data) {
