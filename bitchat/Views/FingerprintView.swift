@@ -133,6 +133,7 @@ struct FingerprintView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
+                        debugRow("Next private send", drInfo.nextPrivateSend.rawValue, singleLine: false)
                         debugRow("Mutual favorite", drInfo.isMutualFavorite ? "Y" : "N")
                         debugRow("Peer npub/hex", drInfo.peerNostrKey ?? "unknown", copy: drInfo.peerNostrKey)
                         debugRow("Peer pubkey hex", drInfo.peerPubkeyHex ?? "unknown", copy: drInfo.peerPubkeyHex)

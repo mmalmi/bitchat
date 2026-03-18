@@ -401,9 +401,17 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
             case sessionActive = "ACTIVE"
         }
 
+        enum NextPrivateSendRoute: String, Equatable {
+            case nearbyBle = "Nearby (Bluetooth)"
+            case nostrDoubleRatchet = "Nostr + forward secrecy (NDR)"
+            case nostrFallback = "Nostr fallback (NIP-17)"
+            case unavailable = "Unavailable"
+        }
+
         var enabled: Bool
         var status: HandshakeStatus
         var statusDetail: String?
+        var nextPrivateSend: NextPrivateSendRoute
 
         var isMutualFavorite: Bool
         var peerNostrKey: String?
@@ -1690,6 +1698,7 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
                 enabled: false,
                 status: .noSessionYet,
                 statusDetail: "Peer not found in UnifiedPeerService",
+                nextPrivateSend: .unavailable,
                 isMutualFavorite: false,
                 peerNostrKey: nil,
                 peerPubkeyHex: nil,
@@ -1711,6 +1720,7 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
 
         let relationship = FavoritesPersistenceService.shared.getFavoriteStatus(for: peer.noisePublicKey)
         let isMutual = relationship?.isMutual == true
+        let isBleReachable = meshService.isPeerConnected(peerID) || meshService.isPeerReachable(peerID)
 
         let peerNostrKey = peer.nostrPublicKey ?? relationship?.peerNostrPublicKey
         let peerPubkeyHex = peerNostrKey.flatMap { nostrPubkeyHex(from: $0) }
@@ -1758,10 +1768,20 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, CommandContextProv
             }
         }
 
+        let nextPrivateSend: DoubleRatchetDebugInfo.NextPrivateSendRoute
+        if isBleReachable {
+            nextPrivateSend = .nearbyBle
+        } else if isMutual, peerPubkeyHex != nil, currentIdentity != nil {
+            nextPrivateSend = enabled ? .nostrDoubleRatchet : .nostrFallback
+        } else {
+            nextPrivateSend = .unavailable
+        }
+
         return DoubleRatchetDebugInfo(
             enabled: enabled,
             status: status,
             statusDetail: statusDetail,
+            nextPrivateSend: nextPrivateSend,
             isMutualFavorite: isMutual,
             peerNostrKey: peerNostrKey,
             peerPubkeyHex: peerPubkeyHex,
