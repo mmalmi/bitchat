@@ -542,6 +542,16 @@ RustBuffer uniffi_ndr_ffi_fn_func_generate_keypair(RustCallStatus *_Nonnull out_
 RustBuffer uniffi_ndr_ffi_fn_func_parse_app_keys_event(RustBuffer event_json, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_FUNC_RESOLVE_CONVERSATION_CANDIDATE_PUBKEYS
+#define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_FUNC_RESOLVE_CONVERSATION_CANDIDATE_PUBKEYS
+RustBuffer uniffi_ndr_ffi_fn_func_resolve_conversation_candidate_pubkeys(RustBuffer owner_pubkey_hex, RustBuffer rumor_pubkey_hex, RustBuffer rumor_tags, RustBuffer sender_pubkey_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_FUNC_RESOLVE_LATEST_APP_KEYS_DEVICES
+#define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_FUNC_RESOLVE_LATEST_APP_KEYS_DEVICES
+RustBuffer uniffi_ndr_ffi_fn_func_resolve_latest_app_keys_devices(RustBuffer event_jsons, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_FUNC_VERSION
 #define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_FUNC_VERSION
 RustBuffer uniffi_ndr_ffi_fn_func_version(RustCallStatus *_Nonnull out_status
@@ -849,6 +859,18 @@ uint16_t uniffi_ndr_ffi_checksum_func_generate_keypair(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_FUNC_PARSE_APP_KEYS_EVENT
 #define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_FUNC_PARSE_APP_KEYS_EVENT
 uint16_t uniffi_ndr_ffi_checksum_func_parse_app_keys_event(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_FUNC_RESOLVE_CONVERSATION_CANDIDATE_PUBKEYS
+#define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_FUNC_RESOLVE_CONVERSATION_CANDIDATE_PUBKEYS
+uint16_t uniffi_ndr_ffi_checksum_func_resolve_conversation_candidate_pubkeys(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_FUNC_RESOLVE_LATEST_APP_KEYS_DEVICES
+#define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_FUNC_RESOLVE_LATEST_APP_KEYS_DEVICES
+uint16_t uniffi_ndr_ffi_checksum_func_resolve_latest_app_keys_devices(void
     
 );
 #endif

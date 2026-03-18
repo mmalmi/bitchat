@@ -3145,6 +3145,31 @@ fileprivate struct FfiConverterSequenceTypePubSubEvent: FfiConverterRustBuffer {
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [[String]]
+
+    public static func write(_ value: [[String]], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterSequenceString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [[String]] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [[String]]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterSequenceString.read(from: &buf))
+        }
+        return seq
+    }
+}
 /**
  * Create a signed AppKeys event JSON for publishing to relays.
  */
@@ -3187,6 +3212,29 @@ public func parseAppKeysEvent(eventJson: String)throws  -> [FfiDeviceEntry] {
 })
 }
 /**
+ * Resolve conversation routing candidates for a decrypted rumor.
+ */
+public func resolveConversationCandidatePubkeys(ownerPubkeyHex: String, rumorPubkeyHex: String, rumorTags: [[String]], senderPubkeyHex: String) -> [String] {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+    uniffi_ndr_ffi_fn_func_resolve_conversation_candidate_pubkeys(
+        FfiConverterString.lower(ownerPubkeyHex),
+        FfiConverterString.lower(rumorPubkeyHex),
+        FfiConverterSequenceSequenceString.lower(rumorTags),
+        FfiConverterString.lower(senderPubkeyHex),$0
+    )
+})
+}
+/**
+ * Resolve the latest authorized device list from a set of AppKeys event JSON strings.
+ */
+public func resolveLatestAppKeysDevices(eventJsons: [String])throws  -> [FfiDeviceEntry] {
+    return try  FfiConverterSequenceTypeFfiDeviceEntry.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_func_resolve_latest_app_keys_devices(
+        FfiConverterSequenceString.lower(eventJsons),$0
+    )
+})
+}
+/**
  * Returns the version of the ndr-ffi crate.
  */
 public func version() -> String {
@@ -3221,6 +3269,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_func_parse_app_keys_event() != 33390) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_func_resolve_conversation_candidate_pubkeys() != 3184) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_func_resolve_latest_app_keys_devices() != 26843) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_func_version() != 58200) {

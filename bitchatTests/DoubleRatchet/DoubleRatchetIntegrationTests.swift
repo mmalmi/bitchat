@@ -10,9 +10,9 @@ import Testing
 
 struct DoubleRatchetIntegrationTests {
 
-    @Test("ndr-ffi version is 0.0.85 (nostr-double-ratchet 0.0.85)")
-    func ndrFfiVersion_is_0_0_85() {
-        #expect(version() == "0.0.85")
+    @Test("ndr-ffi version is 0.0.86 (nostr-double-ratchet 0.0.86)")
+    func ndrFfiVersion_is_0_0_86() {
+        #expect(version() == "0.0.86")
     }
 
     @Test("SessionManager invite flow produces working sessions (encrypt/decrypt roundtrip)")
