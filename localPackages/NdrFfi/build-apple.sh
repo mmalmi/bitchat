@@ -65,24 +65,20 @@ env \
     cargo build -p ndr-ffi --release --target aarch64-apple-darwin
 
 echo "==> Building iOS slices"
-for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+for target in aarch64-apple-ios aarch64-apple-ios-sim; do
     env \
         CARGO_TARGET_DIR="$TARGET_DIR" \
         IPHONEOS_DEPLOYMENT_TARGET="$IOS_MIN" \
         cargo build -p ndr-ffi --release --target "$target"
 done
 
-SIM_FAT_LIB="$OUT_DIR/libndr_ffi_sim.a"
-lipo -create \
-    "$TARGET_DIR/aarch64-apple-ios-sim/release/libndr_ffi.a" \
-    "$TARGET_DIR/x86_64-apple-ios/release/libndr_ffi.a" \
-    -output "$SIM_FAT_LIB"
+SIM_ARM64_LIB="$TARGET_DIR/aarch64-apple-ios-sim/release/libndr_ffi.a"
 
 echo "==> Assembling XCFramework"
 xcodebuild -create-xcframework \
     -library "$TARGET_DIR/aarch64-apple-darwin/release/libndr_ffi.a" -headers "$HEADERS_DIR" \
     -library "$TARGET_DIR/aarch64-apple-ios/release/libndr_ffi.a" -headers "$HEADERS_DIR" \
-    -library "$SIM_FAT_LIB" -headers "$HEADERS_DIR" \
+    -library "$SIM_ARM64_LIB" -headers "$HEADERS_DIR" \
     -output "$OUT_DIR/NdrFfi.xcframework"
 
 echo "==> Updating vendored package"
