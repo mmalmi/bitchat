@@ -8,6 +8,9 @@
 
 import BitLogger
 import Foundation
+#if os(macOS)
+import LocalAuthentication
+#endif
 import Security
 
 // MARK: - Keychain Error Types
@@ -81,6 +84,14 @@ final class KeychainManager: KeychainManagerProtocol {
     // Use consistent service name for all keychain items
     private let service = BitchatApp.bundleID
     private let appGroup = "group.\(BitchatApp.bundleID)"
+
+    #if os(macOS)
+    private func addNonInteractiveAuthenticationContext(to query: inout [String: Any]) {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = context
+    }
+    #endif
     
     // MARK: - Identity Keys
     
@@ -193,7 +204,7 @@ final class KeychainManager: KeychainManagerProtocol {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         #if os(macOS)
-        base[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        addNonInteractiveAuthenticationContext(to: &base)
         #endif
 
         var result: AnyObject?
@@ -346,7 +357,7 @@ final class KeychainManager: KeychainManagerProtocol {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         #if os(macOS)
-        base[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        addNonInteractiveAuthenticationContext(to: &base)
         #endif
 
         var result: AnyObject?
@@ -554,28 +565,44 @@ final class KeychainManager: KeychainManagerProtocol {
 
     /// Save data with a custom service name
     func save(key: String, data: Data, service customService: String, accessible: CFString?) {
-        var query: [String: Any] = [
+        var addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: customService,
             kSecAttrAccount as String: key,
             kSecValueData as String: data
         ]
         if let accessible = accessible {
-            query[kSecAttrAccessible as String] = accessible
+            addQuery[kSecAttrAccessible as String] = accessible
         }
+        #if os(macOS)
+        addQuery[kSecAttrSynchronizable as String] = false
+        #endif
 
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        var deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: customService,
+            kSecAttrAccount as String: key
+        ]
+        #if os(macOS)
+        addNonInteractiveAuthenticationContext(to: &deleteQuery)
+        #endif
+
+        SecItemDelete(deleteQuery as CFDictionary)
+        SecItemAdd(addQuery as CFDictionary, nil)
     }
 
     /// Load data from a custom service
     func load(key: String, service customService: String) -> Data? {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: customService,
             kSecAttrAccount as String: key,
-            kSecReturnData as String: true
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        #if os(macOS)
+        addNonInteractiveAuthenticationContext(to: &query)
+        #endif
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -586,11 +613,14 @@ final class KeychainManager: KeychainManagerProtocol {
 
     /// Delete data from a custom service
     func delete(key: String, service customService: String) {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: customService,
             kSecAttrAccount as String: key
         ]
+        #if os(macOS)
+        addNonInteractiveAuthenticationContext(to: &query)
+        #endif
 
         SecItemDelete(query as CFDictionary)
     }

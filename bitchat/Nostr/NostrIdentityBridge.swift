@@ -6,6 +6,7 @@ final class NostrIdentityBridge {
     private let keychainService = "chat.bitchat.nostr"
     private let currentIdentityKey = "nostr-current-identity"
     private let deviceSeedKey = "nostr-device-seed"
+    private var currentIdentityCache: NostrIdentity?
     // In-memory cache to avoid transient keychain access issues
     private var deviceSeedCache: Data?
     // Cache derived identities to avoid repeated crypto during view rendering
@@ -20,9 +21,19 @@ final class NostrIdentityBridge {
     
     /// Get or create the current Nostr identity
     func getCurrentNostrIdentity() throws -> NostrIdentity? {
+        cacheLock.lock()
+        if let cached = currentIdentityCache {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
         // Check if we already have a Nostr identity
         if let existingData = keychain.load(key: currentIdentityKey, service: keychainService),
            let identity = try? JSONDecoder().decode(NostrIdentity.self, from: existingData) {
+            cacheLock.lock()
+            currentIdentityCache = identity
+            cacheLock.unlock()
             return identity
         }
         
@@ -32,6 +43,10 @@ final class NostrIdentityBridge {
         // Store it
         let data = try JSONEncoder().encode(nostrIdentity)
         keychain.save(key: currentIdentityKey, data: data, service: keychainService, accessible: nil)
+
+        cacheLock.lock()
+        currentIdentityCache = nostrIdentity
+        cacheLock.unlock()
         
         return nostrIdentity
     }
@@ -80,6 +95,10 @@ final class NostrIdentityBridge {
             // nothing persisted; no action needed
         }
 
+        cacheLock.lock()
+        currentIdentityCache = nil
+        derivedIdentityCache.removeAll()
+        cacheLock.unlock()
         deviceSeedCache = nil
     }
 
