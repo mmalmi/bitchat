@@ -9,6 +9,9 @@ The generated files in this package come from the upstream
 `nostr-double-ratchet` checkout, specifically the Rust `ndr-ffi` crate and its
 UniFFI-generated Swift bindings.
 
+The exact upstream revision used for the currently vendored artifacts is
+recorded in `VENDORED_FROM.md`.
+
 Default expected upstream checkout:
 
 ```bash
@@ -33,14 +36,14 @@ Example:
 
 ```bash
 rustup target add aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
-cd /Users/martti/src/bitchat/localPackages/NdrFfi
-./build-apple.sh /Users/martti/src/nostr-double-ratchet
+cd localPackages/NdrFfi
+./build-apple.sh ~/src/nostr-double-ratchet
 ```
 
 Or:
 
 ```bash
-cd /Users/martti/src/bitchat/localPackages/NdrFfi
+cd localPackages/NdrFfi
 NDR_SOURCE_DIR=/path/to/nostr-double-ratchet ./build-apple.sh
 ```
 
@@ -59,7 +62,7 @@ The script:
 ## Recommended Verification
 
 ```bash
-swift test --package-path /Users/martti/src/bitchat/localPackages/NdrFfi
-swift test --filter DoubleRatchetIntegrationTests --package-path /Users/martti/src/bitchat
-swift test --filter NostrTransportTests --package-path /Users/martti/src/bitchat
+swift test --package-path localPackages/NdrFfi
+swift test --filter DoubleRatchetIntegrationTests
+swift test --filter NostrTransportTests
 ```
