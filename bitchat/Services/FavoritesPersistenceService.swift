@@ -1,4 +1,5 @@
 import BitLogger
+import BitFoundation
 import Foundation
 import Combine
 
@@ -31,25 +32,9 @@ final class FavoritesPersistenceService: ObservableObject {
     @Published private(set) var favorites: [Data: FavoriteRelationship] = [:] // Noise pubkey -> relationship
     @Published private(set) var mutualFavorites: Set<Data> = []
     
-    private static var isRunningTestsOrCI: Bool {
-        let env = ProcessInfo.processInfo.environment
-        return NSClassFromString("XCTestCase") != nil ||
-               env["XCTestConfigurationFilePath"] != nil ||
-               env["XCTestBundlePath"] != nil ||
-               env["GITHUB_ACTIONS"] != nil ||
-               env["CI"] != nil
-    }
+    static let shared = FavoritesPersistenceService()
 
-    /// Singleton used by the app. When running under tests/CI, use an in-memory keychain
-    /// implementation to avoid touching the user's real keychain.
-    static let shared: FavoritesPersistenceService = {
-        if isRunningTestsOrCI {
-            return FavoritesPersistenceService(keychain: InMemoryKeychainManager())
-        }
-        return FavoritesPersistenceService()
-    }()
-
-    init(keychain: KeychainManagerProtocol = KeychainManager()) {
+    init(keychain: KeychainManagerProtocol = KeychainManager.makeDefault()) {
         self.keychain = keychain
         loadFavorites()
         
@@ -140,7 +125,13 @@ final class FavoritesPersistenceService: ObservableObject {
         peerNostrPublicKey: String? = nil
     ) {
         let existing = favorites[peerNoisePublicKey]
-        let displayName = peerNickname ?? existing?.peerNickname ?? "Unknown"
+        // Callers that can't resolve the live nickname pass the "Unknown"
+        // placeholder (e.g. a notification arriving before the announce);
+        // never let it clobber a real stored nickname.
+        let incoming = peerNickname.flatMap { name in
+            (name.isEmpty || name == "Unknown") ? nil : name
+        }
+        let displayName = incoming ?? existing?.peerNickname ?? "Unknown"
         
         SecureLogger.info("📨 Received favorite notification: \(displayName) \(favorited ? "favorited" : "unfavorited") us", category: .session)
         

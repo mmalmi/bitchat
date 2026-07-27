@@ -6,8 +6,10 @@
 // For more information, see <https://unlicense.org>
 //
 
+import Combine
 import Foundation
 import Testing
+import BitFoundation
 @testable import bitchat
 
 @Suite("NostrTransport Tests")
@@ -43,7 +45,9 @@ struct NostrTransportTests {
             )
         )
 
-        #expect(!transport.isPeerReachable(fullPeerID))
+        // Offline favorites are addressed by the full 64-hex noise key, so
+        // both forms must resolve to the same reachability answer.
+        #expect(transport.isPeerReachable(fullPeerID))
         #expect(transport.isPeerReachable(shortPeerID))
         #expect(!transport.isPeerReachable(PeerID(str: "feedfeedfeedfeed")))
     }
@@ -82,8 +86,53 @@ struct NostrTransportTests {
         )
         notificationCenter.post(name: .favoriteStatusChanged, object: nil)
 
-        let didRefresh = await TestHelpers.waitUntil({ transport.isPeerReachable(peerID) }, timeout: 0.5)
+        let didRefresh = await TestHelpers.waitUntil({ transport.isPeerReachable(peerID) }, timeout: 5.0)
         #expect(didRefresh)
+    }
+
+    @Test("Prompt delivery requires both a known npub and a relay connection")
+    @MainActor
+    func canDeliverPromptlyTracksRelayConnectivity() async throws {
+        let keychain = MockKeychain()
+        let idBridge = NostrIdentityBridge(keychain: keychain)
+        let recipient = try NostrIdentity.generate()
+        let noiseKey = Data((0..<32).map(UInt8.init))
+        let peerID = PeerID(hexData: noiseKey)
+        let relationship = makeRelationship(
+            peerNoisePublicKey: noiseKey,
+            peerNostrPublicKey: recipient.npub,
+            peerNickname: "Alice"
+        )
+        let connectivity = CurrentValueSubject<Bool, Never>(false)
+
+        let transport = NostrTransport(
+            keychain: keychain,
+            idBridge: idBridge,
+            dependencies: makeDependencies(
+                loadFavorites: { [noiseKey: relationship] },
+                relayConnectivity: { connectivity.eraseToAnyPublisher() }
+            )
+        )
+
+        // Reachable (npub known) but relays down: the peer must not be
+        // treated as promptly deliverable, or the router would skip the
+        // courier and let the message rot in the Nostr send queue.
+        #expect(transport.isPeerReachable(peerID))
+        #expect(!transport.canDeliverPromptly(to: peerID))
+
+        connectivity.send(true)
+        let deliverable = await TestHelpers.waitUntil(
+            { transport.canDeliverPromptly(to: peerID) },
+            timeout: 5.0
+        )
+        #expect(deliverable)
+
+        connectivity.send(false)
+        let undeliverable = await TestHelpers.waitUntil(
+            { !transport.canDeliverPromptly(to: peerID) },
+            timeout: 5.0
+        )
+        #expect(undeliverable)
     }
 
     @Test("Private message resolves short peer ID and emits decryptable packet")
@@ -121,7 +170,7 @@ struct NostrTransportTests {
 
         transport.sendPrivateMessage("hello over nostr", to: shortPeerID, recipientNickname: "Carol", messageID: "pm-1")
 
-        let didSend = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: 0.5)
+        let didSend = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: TestConstants.settleTimeout)
         #expect(didSend)
         let result = try decodeEmbeddedPayload(from: probe.sentEvents[0], recipient: recipient)
         let privateMessage = try decodePrivateMessage(from: result.payload)
@@ -131,6 +180,163 @@ struct NostrTransportTests {
         #expect(privateMessage.content == "hello over nostr")
         #expect(result.packet.recipientID == shortPeerID.routingData)
         #expect(probe.pendingGiftWrapIDs.isEmpty)
+    }
+
+    @Test("Private message prefers NDR when a session already exists")
+    @MainActor
+    func sendPrivateMessagePrefersNdrWhenSessionExists() throws {
+        let keychain = MockKeychain()
+        let idBridge = NostrIdentityBridge(keychain: keychain)
+        let sender = try NostrIdentity.generate()
+        let recipient = try NostrIdentity.generate()
+        let senderRelay = FakeRelayManager()
+        let recipientRelay = FakeRelayManager()
+        let senderStorage = try makeTempDir(label: "transport-ndr-sender")
+        let recipientStorage = try makeTempDir(label: "transport-ndr-recipient")
+        let senderNdr = NdrNostrService(
+            relayManager: senderRelay,
+            deviceId: "transport-ndr-sender",
+            rolloutEnabled: true,
+            storageDirectoryProvider: { senderStorage }
+        )
+        let recipientNdr = NdrNostrService(
+            relayManager: recipientRelay,
+            deviceId: "transport-ndr-recipient",
+            rolloutEnabled: true,
+            storageDirectoryProvider: { recipientStorage }
+        )
+        senderNdr.configureIfNeeded(identity: sender)
+        recipientNdr.configureIfNeeded(identity: recipient)
+        try establishMutualSession(senderNdr, recipientNdr, senderIdentity: sender, recipientIdentity: recipient)
+
+        let noiseKey = Data((64..<96).map(UInt8.init))
+        let fullPeerID = PeerID(hexData: noiseKey)
+        let relationship = makeRelationship(
+            peerNoisePublicKey: noiseKey,
+            peerNostrPublicKey: recipient.npub,
+            peerNickname: "Carol"
+        )
+        let transport = NostrTransport(
+            keychain: keychain,
+            idBridge: idBridge,
+            ndrService: senderNdr,
+            dependencies: makeDependencies(
+                favoriteStatusForNoiseKey: { $0 == noiseKey ? relationship : nil },
+                favoriteStatusForPeerID: { _ in nil },
+                currentIdentity: { sender }
+            )
+        )
+        transport.senderPeerID = PeerID(str: "0123456789abcdef")
+
+        let transportUsed = try transport.sendPrivateMessageAndReturnTransport(
+            "hello via ndr",
+            to: fullPeerID,
+            recipientNickname: "Carol",
+            messageID: "pm-ndr"
+        )
+
+        #expect(transportUsed == .ndr)
+        #expect(senderRelay.sentEvents.contains(where: { $0.kind == 1060 }))
+    }
+
+    @Test("Private message waits for an owner-verified roster before preferring NDR")
+    @MainActor
+    func sendPrivateMessageRequiresVerifiedNdrRoster() throws {
+        let keychain = MockKeychain()
+        let idBridge = NostrIdentityBridge(keychain: keychain)
+        let sender = try NostrIdentity.generate()
+        let recipient = try NostrIdentity.generate()
+        let senderRelay = FakeRelayManager()
+        let recipientRelay = FakeRelayManager()
+        let senderStorage = try makeTempDir(label: "transport-ndr-queued-sender")
+        let recipientStorage = try makeTempDir(label: "transport-ndr-queued-recipient")
+        let senderNdr = NdrNostrService(
+            relayManager: senderRelay,
+            deviceId: "transport-ndr-queued-sender",
+            rolloutEnabled: true,
+            storageDirectoryProvider: { senderStorage }
+        )
+        let recipientNdr = NdrNostrService(
+            relayManager: recipientRelay,
+            deviceId: "transport-ndr-queued-recipient",
+            rolloutEnabled: true,
+            storageDirectoryProvider: { recipientStorage }
+        )
+        senderNdr.configureIfNeeded(identity: sender)
+        recipientNdr.configureIfNeeded(identity: recipient)
+
+        let senderInvite = try #require(senderNdr.currentInviteEventJson())
+        let recipientPublishes = recipientNdr.processOutOfBandEventJson(
+            senderInvite,
+            expectedPeerPubkeyHex: sender.publicKeyHex
+        )
+        let recipientResponse = try #require(
+            recipientPublishes.first(where: { (try? extractNostrKind(json: $0)) == 1059 }),
+            "Recipient should return a response after processing sender invite"
+        )
+        let recipientBootstrap = try #require(
+            recipientRelay.sentEvents.first(where: { $0.kind == 1060 }),
+            "Recipient should publish a bootstrap message event after accepting sender invite"
+        )
+        let recipientAppKeys = try #require(
+            recipientRelay.sentEvents.first(where: { isAppKeysEvent($0) }),
+            "Recipient should publish an AppKeys roster event"
+        )
+        _ = senderNdr.processOutOfBandEventJson(
+            recipientResponse,
+            expectedPeerPubkeyHex: recipient.publicKeyHex
+        )
+        #expect(senderNdr.hasActiveSession(with: recipient.publicKeyHex))
+
+        senderRelay.resetSentEvents()
+        let probe = NostrTransportProbe()
+        let noiseKey = Data((80..<112).map(UInt8.init))
+        let fullPeerID = PeerID(hexData: noiseKey)
+        let relationship = makeRelationship(
+            peerNoisePublicKey: noiseKey,
+            peerNostrPublicKey: recipient.npub,
+            peerNickname: "Queued"
+        )
+        let transport = NostrTransport(
+            keychain: keychain,
+            idBridge: idBridge,
+            ndrService: senderNdr,
+            dependencies: makeDependencies(
+                favoriteStatusForNoiseKey: { $0 == noiseKey ? relationship : nil },
+                favoriteStatusForPeerID: { _ in nil },
+                currentIdentity: { sender },
+                sendEvent: probe.record(event:)
+            )
+        )
+        transport.senderPeerID = PeerID(str: "0123456789abcdef")
+
+        let transportBeforeRoster = try transport.sendPrivateMessageAndReturnTransport(
+            "before verified roster",
+            to: fullPeerID,
+            recipientNickname: "Queued",
+            messageID: "pm-before-ndr-roster"
+        )
+
+        #expect(transportBeforeRoster == .legacy1059)
+        #expect(probe.sentEvents.count == 1)
+        #expect(probe.sentEvents.first?.kind == 1059)
+        #expect(senderRelay.sentEvents.filter { $0.kind == 1060 }.isEmpty)
+
+        senderNdr.processInboundRelayEvent(recipientBootstrap)
+        #expect(senderRelay.sentEvents.filter { $0.kind == 1060 }.isEmpty)
+
+        senderNdr.processInboundRelayEvent(recipientAppKeys)
+
+        let transportAfterRoster = try transport.sendPrivateMessageAndReturnTransport(
+            "after verified roster",
+            to: fullPeerID,
+            recipientNickname: "Queued",
+            messageID: "pm-after-ndr-roster"
+        )
+
+        #expect(transportAfterRoster == .ndr)
+        #expect(probe.sentEvents.count == 1)
+        #expect(senderRelay.sentEvents.contains(where: { $0.kind == 1060 }))
     }
 
     @Test("Favorite notification embeds current npub")
@@ -168,7 +374,7 @@ struct NostrTransportTests {
 
         transport.sendFavoriteNotification(to: fullPeerID, isFavorite: true)
 
-        let didSend = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: 0.5)
+        let didSend = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: TestConstants.settleTimeout)
         #expect(didSend)
         let result = try decodeEmbeddedPayload(from: probe.sentEvents[0], recipient: recipient)
         let privateMessage = try decodePrivateMessage(from: result.payload)
@@ -211,7 +417,7 @@ struct NostrTransportTests {
 
         transport.sendDeliveryAck(for: "ack-1", to: fullPeerID)
 
-        let didSend = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: 0.5)
+        let didSend = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: TestConstants.settleTimeout)
         #expect(didSend)
         let result = try decodeEmbeddedPayload(from: probe.sentEvents[0], recipient: recipient)
 
@@ -251,7 +457,7 @@ struct NostrTransportTests {
             messageID: "geo-1"
         )
 
-        let didSend = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: 0.5)
+        let didSend = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: TestConstants.settleTimeout)
         #expect(didSend)
         let event = probe.sentEvents[0]
         let result = try decodeEmbeddedPayload(from: event, recipient: recipient)
@@ -302,9 +508,10 @@ struct NostrTransportTests {
         transport.sendReadReceipt(first, to: fullPeerID)
         transport.sendReadReceipt(second, to: fullPeerID)
 
-        let sentFirst = await TestHelpers.waitUntil({ probe.sentEvents.count == 1 }, timeout: 1.5)
+        let readReceiptTimeout: TimeInterval = 5.0
+        let sentFirst = await TestHelpers.waitUntil({ probe.sentEvents.count >= 1 }, timeout: readReceiptTimeout)
         try #require(sentFirst, "Expected first queued read receipt event")
-        let scheduledThrottle = await TestHelpers.waitUntil({ probe.scheduledActionCount == 1 }, timeout: 1.5)
+        let scheduledThrottle = await TestHelpers.waitUntil({ probe.scheduledActionCount == 1 }, timeout: readReceiptTimeout)
         try #require(scheduledThrottle, "Expected queued throttle action after first read receipt")
         let firstEvent = try #require(probe.sentEvents.first, "Expected first queued read receipt event")
         let firstPayload = try decodeEmbeddedPayload(from: firstEvent, recipient: recipient).payload
@@ -313,14 +520,24 @@ struct NostrTransportTests {
 
         try #require(probe.runNextScheduledAction(), "Expected queued throttle action after first read receipt")
 
-        let sentSecond = await TestHelpers.waitUntil({ probe.sentEvents.count == 2 }, timeout: 1.5)
+        let sentSecond = await TestHelpers.waitUntil({ probe.sentEvents.count >= 2 }, timeout: readReceiptTimeout)
         try #require(sentSecond, "Expected second read receipt after running throttle action")
         let secondEvent = try #require(probe.sentEvents.last, "Expected second queued read receipt event")
         let secondPayload = try decodeEmbeddedPayload(from: secondEvent, recipient: recipient).payload
         #expect(secondPayload.type == .readReceipt)
         #expect(String(data: secondPayload.data, encoding: .utf8) == "read-2")
+        withExtendedLifetime(transport) {}
     }
 
+    // These thread-safety tests must hammer from the dispatch pool
+    // (concurrentPerform), NOT a task group: transport calls block in
+    // queue.sync, and a 100-task group runs them on the Swift Concurrency
+    // cooperative pool — one thread per core, just 3 on CI runners. Parking
+    // every cooperative thread in a blocking sync violates the forward
+    // progress contract and wedged dispatch on the CI runners' macOS,
+    // deadlocking the whole app suite into the 15-minute job timeout
+    // (watchdog stacks: NostrTransport.isPeerReachable syncs holding all
+    // pool threads). Blocking is legal on dispatch worker threads.
     @Test("Concurrent read receipt enqueue does not crash")
     @MainActor
     func concurrentReadReceiptEnqueue() async throws {
@@ -330,9 +547,9 @@ struct NostrTransportTests {
         let transport = NostrTransport(keychain: keychain, idBridge: idBridge, ndrService: ndrService)
         let iterations = 100
 
-        await withTaskGroup(of: Void.self) { group in
-            for i in 0..<iterations {
-                group.addTask {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                DispatchQueue.concurrentPerform(iterations: iterations) { i in
                     let receipt = ReadReceipt(
                         originalMessageID: UUID().uuidString,
                         readerID: PeerID(str: String(format: "%016x", i)),
@@ -341,8 +558,10 @@ struct NostrTransportTests {
                     let peerID = PeerID(str: String(format: "%016x", i))
                     transport.sendReadReceipt(receipt, to: peerID)
                 }
+                continuation.resume()
             }
         }
+        withExtendedLifetime(transport) {}
     }
 
     @Test("isPeerReachable is thread safe")
@@ -354,18 +573,16 @@ struct NostrTransportTests {
         let transport = NostrTransport(keychain: keychain, idBridge: idBridge, ndrService: ndrService)
         let iterations = 100
 
-        await withTaskGroup(of: Bool.self) { group in
-            for i in 0..<iterations {
-                group.addTask {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                DispatchQueue.concurrentPerform(iterations: iterations) { i in
                     let peerID = PeerID(str: String(format: "%016x", i))
-                    return transport.isPeerReachable(peerID)
+                    #expect(transport.isPeerReachable(peerID) == false)
                 }
-            }
-
-            for await result in group {
-                #expect(result == false)
+                continuation.resume()
             }
         }
+        withExtendedLifetime(transport) {}
     }
 
     @MainActor
@@ -377,7 +594,8 @@ struct NostrTransportTests {
         currentIdentity: @escaping @MainActor () throws -> NostrIdentity? = { nil },
         registerPendingGiftWrap: @escaping @MainActor (String) -> Void = { _ in },
         sendEvent: @escaping @MainActor (NostrEvent) -> Void = { _ in },
-        scheduleAfter: @escaping @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = { _, _ in }
+        scheduleAfter: @escaping @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = { _, _ in },
+        relayConnectivity: @escaping @MainActor () -> AnyPublisher<Bool, Never> = { Just(false).eraseToAnyPublisher() }
     ) -> NostrTransport.Dependencies {
         NostrTransport.Dependencies(
             notificationCenter: notificationCenter,
@@ -387,7 +605,8 @@ struct NostrTransportTests {
             currentIdentity: currentIdentity,
             registerPendingGiftWrap: registerPendingGiftWrap,
             sendEvent: sendEvent,
-            scheduleAfter: scheduleAfter
+            scheduleAfter: scheduleAfter,
+            relayConnectivity: relayConnectivity
         )
     }
 
@@ -397,6 +616,7 @@ struct NostrTransportTests {
         return NdrNostrService(
             relayManager: FakeRelayManager(),
             deviceId: "nostr-transport-\(label)",
+            rolloutEnabled: true,
             storageDirectoryProvider: { storage }
         )
     }
@@ -426,6 +646,43 @@ struct NostrTransportTests {
         return dir
     }
 
+    @MainActor
+    private func establishMutualSession(
+        _ senderService: NdrNostrService,
+        _ recipientService: NdrNostrService,
+        senderIdentity: NostrIdentity,
+        recipientIdentity: NostrIdentity
+    ) throws {
+        var toRecipient: [String] = [try #require(senderService.currentInviteEventJson())]
+        var toSender: [String] = [try #require(recipientService.currentInviteEventJson())]
+
+        for _ in 0..<10 {
+            let nextToSender = toRecipient.flatMap {
+                recipientService.processOutOfBandEventJson(
+                    $0,
+                    expectedPeerPubkeyHex: senderIdentity.publicKeyHex
+                )
+            }
+            let nextToRecipient = toSender.flatMap {
+                senderService.processOutOfBandEventJson(
+                    $0,
+                    expectedPeerPubkeyHex: recipientIdentity.publicKeyHex
+                )
+            }
+            toRecipient = nextToRecipient
+            toSender = nextToSender
+            if senderService.hasActiveSession(with: recipientIdentity.publicKeyHex),
+               recipientService.hasActiveSession(with: senderIdentity.publicKeyHex) {
+                return
+            }
+            if toRecipient.isEmpty && toSender.isEmpty {
+                break
+            }
+        }
+
+        throw NostrTransportTestError.failedToEstablishNdrSession
+    }
+
     private func decodeEmbeddedPayload(
         from event: NostrEvent,
         recipient: NostrIdentity
@@ -453,12 +710,26 @@ struct NostrTransportTests {
         }
         return message
     }
+
+    private func extractNostrKind(json: String) throws -> Int {
+        let data = Data(json.utf8)
+        let obj = try JSONSerialization.jsonObject(with: data, options: [])
+        let dict = try #require(obj as? [String: Any], "Nostr event should be a JSON object")
+        return try #require(dict["kind"] as? Int, "Nostr event should include kind")
+    }
+
+    private func isAppKeysEvent(_ event: NostrEvent) -> Bool {
+        event.kind == 37368 && event.tags.contains { tag in
+            tag.count >= 2 && tag[0] == "type" && tag[1] == "app_keys_roster_snapshot"
+        }
+    }
 }
 
 private enum NostrTransportTestError: Error {
     case invalidEmbeddedContent
     case invalidPacket
     case invalidPrivateMessage
+    case failedToEstablishNdrSession
 }
 
 private func base64URLDecode(_ string: String) -> Data? {

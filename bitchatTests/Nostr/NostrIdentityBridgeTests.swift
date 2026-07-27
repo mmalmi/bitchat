@@ -1,11 +1,15 @@
+import BitFoundation
 import Foundation
 import Testing
 @testable import bitchat
 
 struct NostrIdentityBridgeTests {
-
-    @Test("Current Nostr identity stays stable in-memory when custom keychain persistence is unavailable")
-    func currentIdentity_staysStableWhenCustomKeychainPersistenceIsUnavailable() throws {
+    @Test(
+        "Current Nostr identity stays stable in memory when custom keychain persistence is unavailable"
+    )
+    func currentIdentity_staysStableWhenCustomKeychainPersistenceIsUnavailable()
+        throws
+    {
         let keychain = EphemeralCustomServiceKeychain()
         let bridge = NostrIdentityBridge(keychain: keychain)
 
@@ -16,11 +20,29 @@ struct NostrIdentityBridgeTests {
         #expect(keychain.customLoadCount == 1)
         #expect(keychain.customSaveCount == 1)
     }
+
+    @Test("Clearing associations also clears the in-memory identity")
+    func clearAssociations_clearsCurrentIdentityCache() throws {
+        let keychain = EphemeralCustomServiceKeychain()
+        let bridge = NostrIdentityBridge(keychain: keychain)
+
+        let first = try #require(try bridge.getCurrentNostrIdentity())
+        bridge.clearAllAssociations()
+        let second = try #require(try bridge.getCurrentNostrIdentity())
+
+        #expect(first.publicKeyHex != second.publicKeyHex)
+        #expect(keychain.deleteAllCount == 1)
+        #expect(keychain.customLoadCount == 2)
+        #expect(keychain.customSaveCount == 2)
+    }
 }
 
-private final class EphemeralCustomServiceKeychain: KeychainManagerProtocol {
+private final class EphemeralCustomServiceKeychain:
+    KeychainManagerProtocol
+{
     private(set) var customLoadCount = 0
     private(set) var customSaveCount = 0
+    private(set) var deleteAllCount = 0
 
     func saveIdentityKey(_ keyData: Data, forKey key: String) -> Bool { true }
     func getIdentityKey(forKey key: String) -> Data? { nil }
@@ -41,11 +63,19 @@ private final class EphemeralCustomServiceKeychain: KeychainManagerProtocol {
         .itemNotFound
     }
 
-    func saveIdentityKeyWithResult(_ keyData: Data, forKey key: String) -> KeychainSaveResult {
+    func saveIdentityKeyWithResult(
+        _ keyData: Data,
+        forKey key: String
+    ) -> KeychainSaveResult {
         .success
     }
 
-    func save(key: String, data: Data, service: String, accessible: CFString?) {
+    func save(
+        key: String,
+        data: Data,
+        service: String,
+        accessible: CFString?
+    ) {
         customSaveCount += 1
     }
 
@@ -55,4 +85,8 @@ private final class EphemeralCustomServiceKeychain: KeychainManagerProtocol {
     }
 
     func delete(key: String, service: String) {}
+
+    func deleteAll(service: String) {
+        deleteAllCount += 1
+    }
 }

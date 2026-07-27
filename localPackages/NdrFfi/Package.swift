@@ -21,7 +21,9 @@ let package = Package(
             dependencies: ["ndr_ffiFFI"],
             path: "Sources/NdrFfi"
         ),
-        // Binary xcframework built from the ndr-ffi Rust crate
+        // Dynamic XCFramework built from iris-chat-rs protocol-ffi. Keeping
+        // this runtime dynamic avoids linking a second Rust static runtime
+        // beside Arti's source-built static library.
         .binaryTarget(
             name: "ndr_ffiFFI",
             path: "Frameworks/NdrFfi.xcframework"

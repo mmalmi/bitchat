@@ -1,4 +1,5 @@
 import XCTest
+import BitFoundation
 @testable import bitchat
 
 final class RequestSyncManagerTests: XCTestCase {
@@ -62,7 +63,7 @@ final class RequestSyncManagerTests: XCTestCase {
     }
 
     private func waitUntil(
-        timeout: TimeInterval = 1.0,
+        timeout: TimeInterval = TestConstants.settleTimeout,
         condition: @escaping () -> Bool
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
