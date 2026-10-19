@@ -15,7 +15,6 @@ final class InteropLabControl {
         }
         self.token = token
         self.execute = execute
-        self.execute = execute
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: 18761)
         listener = try NWListener(using: parameters)
