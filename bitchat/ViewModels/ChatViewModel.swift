@@ -644,9 +644,12 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, SynchronousMessage
     @MainActor
     @discardableResult
     func appendPrivateMessage(_ message: BitchatMessage, to peerID: PeerID) -> Bool {
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        let wasKnown = privateChatsContainMessage(withID: message.id)
+        #endif
         let inserted = conversations.append(message, to: .directPeer(peerID))
         #if DEBUG && BITCHAT_INTEROP_LAB
-        if inserted { InteropLabRuntime.recordReceived(message, peerID: peerID) }
+        if inserted && !wasKnown { InteropLabRuntime.recordReceived(message, peerID: peerID) }
         #endif
         return inserted
     }
@@ -655,7 +658,15 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, SynchronousMessage
     /// copies); an existing message keeps its timeline position.
     @MainActor
     func upsertPrivateMessage(_ message: BitchatMessage, in peerID: PeerID) {
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        let wasKnown = privateChatsContainMessage(withID: message.id)
+        #endif
         conversations.upsertByID(message, in: .directPeer(peerID))
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        if !wasKnown && privateChat(peerID, containsMessageWithID: message.id) {
+            InteropLabRuntime.recordReceived(message, peerID: peerID)
+        }
+        #endif
     }
 
     /// Applies a delivery status to a private message by ID. Returns `false`
