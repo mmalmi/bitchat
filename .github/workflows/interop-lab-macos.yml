@@ -29,7 +29,9 @@ jobs:
           key: ndr-ffi-apple-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('localPackages/NdrFfi/RUST_TOOLCHAIN', 'localPackages/NdrFfi/SOURCE_REVISION', 'localPackages/NdrFfi/build-apple.sh', 'localPackages/NdrFfi/SWIFT_BINDINGS_SHA256', 'vendor/nostr-double-ratchet/rust/Cargo.lock') }}
       - name: Build pinned Mac native framework
         run: localPackages/NdrFfi/build-apple.sh --platform macos
-      # Production tests are covered separately by swift-tests.yml.
+      - name: Verify production ratchet regression suite
+        timeout-minutes: 12
+        run: swift test --jobs 2 --filter NdrOutOfBandTransportTests
       - name: Build isolated debug lab app
         env:
           BITCHAT_LAB_BUILD_ROOT: ${{ runner.temp }}/ndr-interop-macos
