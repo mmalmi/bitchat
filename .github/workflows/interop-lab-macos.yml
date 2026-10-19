@@ -1,0 +1,44 @@
+name: Build disposable Mac interop lab
+on:
+  push:
+    branches: [codex/ios-ndr-physical-lab]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - name: Select validated Xcode
+        run: sudo xcodes select "$(cat .xcode-version)"
+      - name: Install pinned native toolchain
+        run: |
+          rust_version="$(cat localPackages/NdrFfi/RUST_TOOLCHAIN)"
+          rustup toolchain install "$rust_version" --profile minimal
+          rustup target add --toolchain "$rust_version" aarch64-apple-darwin x86_64-apple-darwin
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cache/ndr-ffi/apple/target
+          key: ndr-ffi-apple-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('localPackages/NdrFfi/RUST_TOOLCHAIN', 'localPackages/NdrFfi/SOURCE_REVISION', 'localPackages/NdrFfi/build-apple.sh', 'localPackages/NdrFfi/SWIFT_BINDINGS_SHA256', 'vendor/nostr-double-ratchet/rust/Cargo.lock') }}
+      - name: Build pinned Mac native framework
+        run: localPackages/NdrFfi/build-apple.sh --platform macos
+      - name: Verify production ratchet regression suite
+        timeout-minutes: 12
+        run: swift test --jobs 2 --filter NdrOutOfBandTransportTests
+      - name: Build isolated debug lab app
+        env:
+          BITCHAT_LAB_BUILD_ROOT: ${{ runner.temp }}/ndr-interop-macos
+        run: tools/interop-lab/build-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ndr-interop-macos
+          path: ${{ runner.temp }}/ndr-interop-macos/ndr-interop-macos.tar
+          retention-days: 1
+          if-no-files-found: error

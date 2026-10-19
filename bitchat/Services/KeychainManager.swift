@@ -68,6 +68,9 @@ final class KeychainManager: KeychainManagerProtocol {
     /// mutate the developer's real keychain (`SecItemCopyMatching` can also
     /// hang in test environments). Production behavior is unchanged.
     static func makeDefault() -> KeychainManagerProtocol {
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        return InteropLabStorage.keychain
+        #else
         // PreviewKeychainManager lives in _PreviewHelpers, a development
         // asset excluded from archive builds — release code must not
         // reference it. Tests always run Debug, so the guard is lossless.
@@ -75,6 +78,7 @@ final class KeychainManager: KeychainManagerProtocol {
         if TestEnvironment.isRunningTests { return sharedTestKeychain }
         #endif
         return KeychainManager()
+        #endif
     }
 
     #if DEBUG

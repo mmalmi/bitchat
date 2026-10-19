@@ -9,7 +9,9 @@
 import SwiftUI
 import UserNotifications
 
+#if !DEBUG || !BITCHAT_INTEROP_LAB
 @main
+#endif
 struct BitchatApp: App {
     static let bundleID = Bundle.main.bundleIdentifier ?? "chat.bitchat"
     static let groupID = "group.\(bundleID)"

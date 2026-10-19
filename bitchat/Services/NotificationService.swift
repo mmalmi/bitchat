@@ -137,12 +137,16 @@ final class NotificationService {
     private init() {
         self.hidePreviewsProvider = { NotificationPrivacySettings.hideMessagePreviews }
         self.isRunningTestsProvider = {
+            #if DEBUG && BITCHAT_INTEROP_LAB
+            return true
+            #else
             let env = ProcessInfo.processInfo.environment
             return NSClassFromString("XCTestCase") != nil ||
                    env["XCTestConfigurationFilePath"] != nil ||
                    env["XCTestBundlePath"] != nil ||
                    env["GITHUB_ACTIONS"] != nil ||
                    env["CI"] != nil
+            #endif
         }
         if isRunningTestsProvider() {
             self.authorizer = NoopNotificationAuthorizer()

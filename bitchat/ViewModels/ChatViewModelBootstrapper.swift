@@ -72,6 +72,18 @@ final class ChatViewModelBootstrapper {
     }
 
     func configure() {
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        wireServiceGraph()
+        configureTransport()
+        bindPeerService()
+        configureNoiseCallbacks()
+        bindNdrRelayRetry()
+        registerObservers()
+        viewModel.nostrRelayManager = NostrRelayManager.shared
+        viewModel.publicMessagePipeline.delegate = viewModel.publicConversationCoordinator
+        viewModel.isStartupPhase = false
+        return
+        #else
         wireServiceGraph()
         bindFeatureObjectChanges()
         loadPersistedViewState()
@@ -88,6 +100,7 @@ final class ChatViewModelBootstrapper {
         bindTeleportState()
         requestNotifications()
         registerObservers()
+        #endif
     }
 }
 

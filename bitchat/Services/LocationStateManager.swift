@@ -86,7 +86,14 @@ private final class CLGeocoderAdapter: LocationStateGeocoding {
 ///
 /// Consolidates LocationChannelManager + GeohashBookmarksStore into a single source of truth.
 final class LocationStateManager: NSObject, CLLocationManagerDelegate, ObservableObject {
+    #if DEBUG && BITCHAT_INTEROP_LAB
+    static let shared = LocationStateManager(
+        storage: .standard, locationManager: InteropLabNoLocation(),
+        geocoder: InteropLabNoGeocoder(), shouldInitializeCoreLocation: false
+    )
+    #else
     static let shared = LocationStateManager()
+    #endif
 
     // MARK: - Permission State
 

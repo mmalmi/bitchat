@@ -94,7 +94,22 @@ struct NostrRelayManagerDependencies {
 private extension NostrRelayManagerDependencies {
     @MainActor
     static func live() -> Self {
-        Self(
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        return Self(
+            activationAllowed: { true }, userTorEnabled: { false },
+            hasMutualFavorites: { true }, hasLocationPermission: { false },
+            mutualFavoritesPublisher: Empty().eraseToAnyPublisher(),
+            locationPermissionPublisher: Empty().eraseToAnyPublisher(),
+            torEnforced: { false }, torIsReady: { true }, torIsForeground: { true },
+            awaitTorReady: { $0(true) },
+            makeSession: { URLSessionAdapter(base: URLSession(configuration: .ephemeral)) },
+            verifyEventSignature: { $0.isValidSignature() },
+            scheduleAfter: { delay, action in
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
+            }, now: Date.init, jitterUnit: { 0.5 }, customRelays: { [] }
+        )
+        #else
+        return Self(
             activationAllowed: { NetworkActivationService.shared.activationAllowed },
             userTorEnabled: { NetworkActivationService.shared.userTorEnabled },
             hasMutualFavorites: { !FavoritesPersistenceService.shared.mutualFavorites.isEmpty },
@@ -125,6 +140,7 @@ private extension NostrRelayManagerDependencies {
             },
             selectedChannelPublisher: LocationChannelManager.shared.$selectedChannel.eraseToAnyPublisher()
         )
+        #endif
     }
 }
 
@@ -155,6 +171,9 @@ final class NostrRelayManager: ObservableObject {
     
     // Built-in relays carry private-message envelopes, so avoid relays known to
     // reject the kinds they use.
+    #if DEBUG && BITCHAT_INTEROP_LAB
+    nonisolated private static let builtInRelays = ["ws://127.0.0.1:18762"]
+    #else
     nonisolated private static let builtInRelays = [
         "wss://relay.damus.io",
         "wss://nos.lol",
@@ -162,6 +181,7 @@ final class NostrRelayManager: ObservableObject {
         "wss://offchain.pub"
         // For local testing, you can add: "ws://localhost:8080"
     ]
+    #endif
     /// Exposed so the relay settings UI can reject re-adding a built-in.
     /// `nonisolated` because it is an immutable constant with no actor state.
     nonisolated static let builtInRelayURLs = Set(
@@ -896,6 +916,9 @@ final class NostrRelayManager: ObservableObject {
         var result: [String] = []
         for rawURL in urls {
             guard let url = NostrRelayURL.normalized(rawURL) else { continue }
+            #if DEBUG && BITCHAT_INTEROP_LAB
+            guard url == "ws://127.0.0.1:18762" else { continue }
+            #endif
             if !allowDefaultRelays && defaultRelaySet.contains(url) { continue }
             if seen.insert(url).inserted {
                 result.append(url)
@@ -1197,6 +1220,9 @@ final class NostrRelayManager: ObservableObject {
     }
     
     private func connectToRelay(_ urlString: String) {
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        guard urlString == "ws://127.0.0.1:18762" else { return }
+        #endif
         // Global network policy gate
         guard dependencies.activationAllowed() else { return }
         guard let url = URL(string: urlString) else { 

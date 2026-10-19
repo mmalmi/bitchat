@@ -644,7 +644,11 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, SynchronousMessage
     @MainActor
     @discardableResult
     func appendPrivateMessage(_ message: BitchatMessage, to peerID: PeerID) -> Bool {
-        conversations.append(message, to: .directPeer(peerID))
+        let inserted = conversations.append(message, to: .directPeer(peerID))
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        if inserted { InteropLabRuntime.recordReceived(message, peerID: peerID) }
+        #endif
+        return inserted
     }
 
     /// Replace-or-append a private message by ID (media progress, mirrored
@@ -2120,6 +2124,12 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, SynchronousMessage
 
     @MainActor
     func didReceiveTransportEvent(_ event: TransportEvent) {
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        if case let .noisePayloadReceived(peer, type, _, _) = event {
+            guard InteropLabRuntime.active?.isAllowed(peer) == true else { return }
+            if type == .ndrEvent { InteropLabRuntime.active?.receivedBootstrapCount += 1 }
+        }
+        #endif
         switch event {
         case .messageReceived(let message):
             _ = didReceiveTransportMessageSynchronously(message)
@@ -2199,7 +2209,10 @@ final class ChatViewModel: ObservableObject, BitchatDelegate, SynchronousMessage
 
     @MainActor
     func didReceiveTransportMessageSynchronously(_ message: BitchatMessage) -> Bool {
-        transportEventCoordinator.didReceiveMessageSynchronously(message)
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        guard let peer = message.senderPeerID, InteropLabRuntime.active?.isAllowed(peer) == true else { return false }
+        #endif
+        return transportEventCoordinator.didReceiveMessageSynchronously(message)
     }
 
     func didReceiveMessage(_ message: BitchatMessage) {

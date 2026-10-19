@@ -37,6 +37,11 @@ extension ChatViewModel {
         messageTimestamp: Date,
         source: NostrPrivateMessageSource = .legacy1059
     ) {
+        #if DEBUG && BITCHAT_INTEROP_LAB
+        let previousSource = InteropLabRuntime.receivingSource
+        InteropLabRuntime.receivingSource = source == .ndr ? "ndr" : "legacy1059"
+        defer { InteropLabRuntime.receivingSource = previousSource }
+        #endif
         privateConversationCoordinator.handlePrivateMessage(
             payload,
             senderPubkey: senderPubkey,

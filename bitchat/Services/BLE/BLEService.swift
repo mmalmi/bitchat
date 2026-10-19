@@ -987,6 +987,30 @@ final class BLEService: NSObject {
         }
     }
     
+    #if DEBUG && BITCHAT_INTEROP_LAB
+    // Test-only radio pause uses the existing lifecycle admission barrier.
+    // Identity, favorites and native NDR state remain durable.
+    func interopLabSetRadioEnabled(_ enabled: Bool) {
+        setPanicSuspended(!enabled)
+        if enabled {
+            startServices()
+            sendAnnounce(forceSend: true)
+        } else {
+            stopServicesImmediatelyForPanic()
+        }
+    }
+
+    func interopLabRadioStatus() -> [String: Any] {
+        bleQueue.sync {
+            ["suspended": isPanicSuspended,
+             "scanning": centralManager?.isScanning ?? false,
+             "advertising": peripheralManager?.isAdvertising ?? false,
+             "connected_peripherals": linkStateStore.peripheralStates.filter { $0.isConnected }.count,
+             "subscribed_centrals": linkStateStore.subscribedCentralCount]
+        }
+    }
+    #endif
+
     func stopServices() {
         let localIdentity = localIdentityState.snapshot()
         // Send leave message synchronously to ensure delivery
