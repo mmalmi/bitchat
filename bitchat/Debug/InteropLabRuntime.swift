@@ -125,7 +125,7 @@ final class InteropLabRuntime: ObservableObject {
         }
         return ["ready": ready, "nickname": nickname, "peer_id": mesh.myPeerID.id,
                 "noise_pubkey": mesh.noiseStaticPublicKeyData().hexEncodedString(),
-                "nostr_pubkey": (try? bridge.getCurrentNostrIdentity().publicKeyHex) ?? "",
+                "nostr_pubkey": (try? bridge.getCurrentNostrIdentity()?.publicKeyHex) ?? "",
                 "bluetooth_state": mesh.getCurrentBluetoothState().rawValue,
                 "radio": mesh.interopLabRadioStatus(),
                 "rollout_enabled": ndr.isRolloutEnabled,
