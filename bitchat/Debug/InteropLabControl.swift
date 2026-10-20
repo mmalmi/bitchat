@@ -1,4 +1,4 @@
-#if DEBUG && BITCHAT_INTEROP_LAB && os(macOS)
+#if DEBUG && BITCHAT_INTEROP_LAB
 import Foundation
 import Network
 

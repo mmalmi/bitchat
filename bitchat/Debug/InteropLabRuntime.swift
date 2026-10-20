@@ -1,5 +1,7 @@
-#if DEBUG && BITCHAT_INTEROP_LAB && os(macOS)
-import AppKit
+#if DEBUG && BITCHAT_INTEROP_LAB
+#if os(iOS)
+import UIKit
+#endif
 import BitFoundation
 import Combine
 import Foundation
@@ -24,7 +26,7 @@ final class InteropLabRuntime: ObservableObject {
     static weak var active: InteropLabRuntime?
     static var receivingSource = "ble"
     @Published private(set) var ready = false
-    let nickname = "ndr-lab-mac"
+    let nickname = "ndr-lab-apple"
     let mesh: BLEService
     let viewModel: ChatViewModel
     let bridge: NostrIdentityBridge
@@ -35,6 +37,7 @@ final class InteropLabRuntime: ObservableObject {
     private var peerKeys: [String: Data] = [:]
     private var received: [[String: String]] = []
     private var sent: [[String: String]] = []
+    private var backgroundCount = 0
     var receivedBootstrapCount = 0
     private let root: URL
 
@@ -55,6 +58,12 @@ final class InteropLabRuntime: ObservableObject {
         mesh = labMesh
         viewModel = labViewModel
         Self.active = self
+        #if os(iOS)
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.backgroundCount += 1 }
+        }
+        #endif
         if let data = try? Data(contentsOf: root.appendingPathComponent("approved.json")) {
             approved = (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
         }
@@ -129,6 +138,7 @@ final class InteropLabRuntime: ObservableObject {
                 "bluetooth_state": mesh.getCurrentBluetoothState().rawValue,
                 "radio": mesh.interopLabRadioStatus(),
                 "rollout_enabled": ndr.isRolloutEnabled,
+                "background_count": backgroundCount,
                 "relay_connected": NostrRelayManager.shared.isDMRelayConnected,
                 "unknown_peer_count": snapshots.filter { !isAllowed($0.peerID) }.count,
                 "received_bootstrap_count": receivedBootstrapCount,

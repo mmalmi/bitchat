@@ -7,7 +7,9 @@ import CoreLocation
 enum InteropLabStorage {
     static let root: URL = {
         precondition(Bundle.main.bundleIdentifier == "chat.bitchat.ndrlab")
+        #if os(macOS)
         precondition(NSHomeDirectory().contains("/Containers/chat.bitchat.ndrlab/Data"))
+        #endif
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("interop-lab", isDirectory: true)
         try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,

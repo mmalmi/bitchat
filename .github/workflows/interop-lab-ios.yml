@@ -1,0 +1,35 @@
+name: Build disposable iOS interop lab
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - name: Select validated Xcode
+        run: sudo xcodes select "$(cat .xcode-version)"
+      - name: Reuse verified native source build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(cat localPackages/NdrFfi/SOURCE_REVISION)" = 6177add831597f2e66f34ade3717c6201852cbdf
+          gh run download 39344131538 --repo mmalmi/bitchat \
+            --name ndr-ffi-xcframework --dir "$RUNNER_TEMP/ndr-ffi"
+          tar -xf "$RUNNER_TEMP/ndr-ffi/ndr-ffi-apple.tar" -C localPackages/NdrFfi
+          test "$(shasum -a 256 localPackages/NdrFfi/Sources/NdrFfi/NdrFfi.swift | cut -d ' ' -f 1)" = "$(cat localPackages/NdrFfi/SWIFT_BINDINGS_SHA256)"
+      - name: Build isolated unsigned iOS lab
+        env:
+          BITCHAT_LAB_BUILD_ROOT: ${{ runner.temp }}/ndr-interop-ios
+        run: bash tools/interop-lab/build-ios.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ndr-interop-ios
+          path: ${{ runner.temp }}/ndr-interop-ios/ndr-interop-ios.tar
+          retention-days: 1
+          if-no-files-found: error

@@ -172,7 +172,13 @@ final class NostrRelayManager: ObservableObject {
     // Built-in relays carry private-message envelopes, so avoid relays known to
     // reject the kinds they use.
     #if DEBUG && BITCHAT_INTEROP_LAB
-    nonisolated private static let builtInRelays = ["ws://127.0.0.1:18762"]
+    nonisolated private static let builtInRelays: [String] = {
+        let relay = ProcessInfo.processInfo.environment["BITCHAT_LAB_RELAY_URL"] ?? "ws://127.0.0.1:18762"
+        guard let url = URL(string: relay), url.scheme == "ws", let host = url.host,
+              host == "127.0.0.1" || host.hasPrefix("192.168.") || host.hasPrefix("10.")
+        else { preconditionFailure("A controlled private relay is required") }
+        return [relay]
+    }()
     #else
     nonisolated private static let builtInRelays = [
         "wss://relay.damus.io",
