@@ -2,6 +2,7 @@ name: Build disposable Mac interop lab
 on:
   push:
     branches: [codex/ios-ndr-physical-lab]
+    paths: [tools/interop-lab/build-macos.sh, .github/workflows/interop-lab-macos.yml]
   workflow_dispatch:
 permissions:
   contents: read

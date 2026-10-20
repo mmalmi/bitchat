@@ -1,5 +1,7 @@
 name: Build disposable iOS interop lab
 on:
+  push:
+    branches: [codex/ios-ndr-physical-lab]
   workflow_dispatch:
 permissions:
   contents: read
