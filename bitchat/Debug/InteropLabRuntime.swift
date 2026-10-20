@@ -61,7 +61,18 @@ final class InteropLabRuntime: ObservableObject {
         #if os(iOS)
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
                                                object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.backgroundCount += 1 }
+            MainActor.assumeIsolated {
+                self?.backgroundCount += 1
+                NostrRelayManager.shared.disconnect()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.ready else { return }
+                self.viewModel.setupNostrMessageHandling()
+                NostrRelayManager.shared.connect()
+            }
         }
         #endif
         if let data = try? Data(contentsOf: root.appendingPathComponent("approved.json")) {

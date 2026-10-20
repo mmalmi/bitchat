@@ -15,6 +15,7 @@ app="$build_root/DerivedData/Build/Products/Debug-iphoneos/bitchat.app"
 rm -rf "$app/PlugIns"
 /usr/libexec/PlistBuddy -c 'Add :NSAppTransportSecurity dict' "$app/Info.plist" || true
 /usr/libexec/PlistBuddy -c 'Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true' "$app/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true' "$app/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add :NSLocalNetworkUsageDescription string Controlled synthetic interoperability tests' "$app/Info.plist"
 COPYFILE_DISABLE=1 tar -cf "$build_root/ndr-interop-ios.tar" -C "$(dirname "$app")" bitchat.app
 shasum -a 256 "$build_root/ndr-interop-ios.tar"
