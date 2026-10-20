@@ -173,19 +173,6 @@ struct NdrOutOfBandTransportTests {
         #expect(!requestedStorage)
     }
 
-    @Test("Authenticated identities elect exactly one initiator")
-    @MainActor
-    func bootstrapElectsOneInitiator() {
-        let lower = String(repeating: "79", count: 32)
-        let higher = String(repeating: "c6", count: 32)
-        #expect(DoubleRatchetFeature.shouldInitiate(localPubkeyHex: lower, peerPubkeyHex: higher))
-        #expect(!DoubleRatchetFeature.shouldInitiate(localPubkeyHex: higher, peerPubkeyHex: lower))
-        #expect(!DoubleRatchetFeature.shouldInitiate(localPubkeyHex: lower, peerPubkeyHex: lower))
-        #expect(DoubleRatchetFeature.shouldInitiate(localPubkeyHex: lower, peerPubkeyHex: higher.uppercased()))
-        #expect(!DoubleRatchetFeature.shouldInitiate(localPubkeyHex: "", peerPubkeyHex: higher))
-        #expect(!DoubleRatchetFeature.shouldInitiate(localPubkeyHex: lower, peerPubkeyHex: String(repeating: "g", count: 64)))
-    }
-
     @Test("A failed runtime open stays fail-closed until identity change")
     @MainActor
     func configurationFailureRequiresExplicitRecoveryBoundary() throws {
@@ -572,9 +559,9 @@ struct NdrOutOfBandTransportTests {
         #expect(aliceService.currentInviteEventJson() != nil)
     }
 
-    @Test("A favorite Nostr rebind retires the old peer for either bootstrap role", arguments: [false, true])
+    @Test("A favorite Nostr rebind retires the old peer regardless of key order", arguments: [false, true])
     @MainActor
-    func favoriteIdentityRebindRetiresOldPeerBeforeBootstrap(localInitiates: Bool) throws {
+    func favoriteIdentityRebindRetiresOldPeerBeforeBootstrap(localKeySortsFirst: Bool) throws {
         let relay = FakeRelayManager()
         let storage = try makeTempDir(label: "favorite-rebind-local")
         let service = NdrNostrService(
@@ -583,12 +570,12 @@ struct NdrOutOfBandTransportTests {
             storageDirectoryProvider: { storage }
         )
         let local = try NostrIdentity(
-            privateKeyData: Data(repeating: 0, count: 31) + Data([localInitiates ? 1 : 2])
+            privateKeyData: Data(repeating: 0, count: 31) + Data([localKeySortsFirst ? 1 : 2])
         )
         let newPeer = try NostrIdentity(
-            privateKeyData: Data(repeating: 0, count: 31) + Data([localInitiates ? 2 : 1])
+            privateKeyData: Data(repeating: 0, count: 31) + Data([localKeySortsFirst ? 2 : 1])
         )
-        #expect((local.publicKeyHex < newPeer.publicKeyHex) == localInitiates)
+        #expect((local.publicKeyHex < newPeer.publicKeyHex) == localKeySortsFirst)
         let (viewModel, transport, favoritesService) = makeViewModel(
             ndrService: service, nostrKeychain: try identityKeychain(local)
         )
@@ -648,7 +635,7 @@ struct NdrOutOfBandTransportTests {
         )
         #expect(!service.hasPairwiseSession(with: oldPeer.publicKeyHex))
         #expect(favoritesService.isNdrRequired(for: noiseKey))
-        #expect(transport.sentNdrEvents.count == (localInitiates ? 1 : 0))
+        #expect(transport.sentNdrEvents.count == 1)
     }
 
     @Test("A failed durable favorite commit stays journaled after native retirement")
@@ -1499,32 +1486,29 @@ struct NdrOutOfBandTransportTests {
             ).first)
             viewModel.handleNdrEventPayload(from: peerID, payload: Data(response.eventJson.utf8))
             #expect(service.hasPairwiseSession(with: remote.publicKeyHex))
-            retryScheduler.runNext()
-            #expect(transport.sentNdrEvents.count == 2, "local native session state stops invite retries")
-            #expect(retryScheduler.scheduled.isEmpty)
-        } else {
-            for expectedSendCount in 3...5 {
-                retryScheduler.runNext()
-                #expect(transport.sentNdrEvents.count == expectedSendCount)
-                if expectedSendCount < 5 {
-                    let scheduled = await TestHelpers.waitUntil(
-                        { !retryScheduler.scheduled.isEmpty },
-                        timeout: TestConstants.settleTimeout
-                    )
-                    #expect(scheduled)
-                }
-            }
-            let allCompletionsFinished = await TestHelpers.waitUntil(
-                { transport.completedNdrSendCount == 5 },
-                timeout: TestConstants.settleTimeout
-            )
-            #expect(allCompletionsFinished)
-            #expect(retryScheduler.requestedDelays == [0.25, 0.5, 1, 2])
             viewModel.bootstrapDoubleRatchetIfNeeded(for: peerID)
-            viewModel.bootstrapDoubleRatchetIfNeeded(for: peerID)
-            #expect(transport.sentNdrEvents.count == 5, "the same binding cannot renew an exhausted retry budget")
-            #expect(retryScheduler.scheduled.isEmpty)
         }
+        for expectedSendCount in 3...5 {
+            retryScheduler.runNext()
+            #expect(transport.sentNdrEvents.count == expectedSendCount)
+            if expectedSendCount < 5 {
+                let scheduled = await TestHelpers.waitUntil(
+                    { !retryScheduler.scheduled.isEmpty },
+                    timeout: TestConstants.settleTimeout
+                )
+                #expect(scheduled)
+            }
+        }
+        let allCompletionsFinished = await TestHelpers.waitUntil(
+            { transport.completedNdrSendCount == 5 },
+            timeout: TestConstants.settleTimeout
+        )
+        #expect(allCompletionsFinished)
+        #expect(retryScheduler.requestedDelays == [0.25, 0.5, 1, 2])
+        viewModel.bootstrapDoubleRatchetIfNeeded(for: peerID)
+        viewModel.bootstrapDoubleRatchetIfNeeded(for: peerID)
+        #expect(transport.sentNdrEvents.count == 5, "the same binding cannot renew an exhausted retry budget")
+        #expect(retryScheduler.scheduled.isEmpty)
         #expect(Set(transport.sentNdrEvents.map(\.eventJson)).count == 1,
                 "retries must retransmit the identical native invite")
     }
