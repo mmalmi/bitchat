@@ -33,6 +33,9 @@ final class InteropLabRuntime: ObservableObject {
     let favorites: FavoritesPersistenceService
     let ndr: NdrNostrService
     private var control: InteropLabControl?
+    #if os(iOS)
+    private let relayTunnel: InteropLabRelayTunnel?
+    #endif
     private var approved: [String: String] = [:] // Synthetic Noise key -> approved nickname.
     private var peerKeys: [String: Data] = [:]
     private var received: [[String: String]] = []
@@ -43,6 +46,9 @@ final class InteropLabRuntime: ObservableObject {
 
     init() {
         root = InteropLabStorage.root
+        #if os(iOS)
+        relayTunnel = try? InteropLabRelayTunnel()
+        #endif
         let keychain = InteropLabStorage.keychain
         let labBridge = NostrIdentityBridge(keychain: keychain)
         let labFavorites = FavoritesPersistenceService.shared
