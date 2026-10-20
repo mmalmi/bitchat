@@ -239,10 +239,7 @@ extension ChatViewModel: ChatTransportEventContext {
             ndrInviteAttemptTokenByPeer.removeValue(forKey: peerID)
             return
         }
-        guard DoubleRatchetFeature.shouldInitiate(
-            localPubkeyHex: currentIdentity.publicKeyHex,
-            peerPubkeyHex: peerPubkeyHex
-        ), let invite = ndrService.currentInviteAction() else { return }
+        guard let invite = ndrService.currentInviteAction() else { return }
         let inviteAttemptToken = [
             authenticated.sessionGeneration.uuidString,
             peerPubkeyHex,

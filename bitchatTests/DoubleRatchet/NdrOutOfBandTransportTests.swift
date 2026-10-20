@@ -151,11 +151,10 @@ struct NdrOutOfBandTransportTests {
         #expect(NoisePayloadType.decoded(rawValue: 0x12) == .vouch)
     }
 
-    @Test("Double-ratchet rollout remains dark until coordination completes")
+    @Test("Double-ratchet is negotiated by default and an explicit disable fails closed")
     @MainActor
-    func rolloutGateIsDisabledByDefaultAndFailsClosed() throws {
-        #expect(!DoubleRatchetFeature.isEnabled)
-        #expect(!PeerCapabilities.localSupported.contains(.doubleRatchet))
+    func rolloutIsEnabledByDefaultAndExplicitDisableFailsClosed() throws {
+        #expect(DoubleRatchetFeature.isEnabled)
         let identity = try NostrIdentity.generate()
         var requestedStorage = false
         let service = NdrNostrService(
@@ -172,6 +171,19 @@ struct NdrOutOfBandTransportTests {
         #expect(!service.isConfigured)
         #expect(service.currentInviteEventJson() == nil)
         #expect(!requestedStorage)
+    }
+
+    @Test("Authenticated identities elect exactly one initiator")
+    @MainActor
+    func bootstrapElectsOneInitiator() {
+        let lower = String(repeating: "79", count: 32)
+        let higher = String(repeating: "c6", count: 32)
+        #expect(DoubleRatchetFeature.shouldInitiate(localPubkeyHex: lower, peerPubkeyHex: higher))
+        #expect(!DoubleRatchetFeature.shouldInitiate(localPubkeyHex: higher, peerPubkeyHex: lower))
+        #expect(!DoubleRatchetFeature.shouldInitiate(localPubkeyHex: lower, peerPubkeyHex: lower))
+        #expect(DoubleRatchetFeature.shouldInitiate(localPubkeyHex: lower, peerPubkeyHex: higher.uppercased()))
+        #expect(!DoubleRatchetFeature.shouldInitiate(localPubkeyHex: "", peerPubkeyHex: higher))
+        #expect(!DoubleRatchetFeature.shouldInitiate(localPubkeyHex: lower, peerPubkeyHex: String(repeating: "g", count: 64)))
     }
 
     @Test("A failed runtime open stays fail-closed until identity change")
@@ -560,9 +572,9 @@ struct NdrOutOfBandTransportTests {
         #expect(aliceService.currentInviteEventJson() != nil)
     }
 
-    @Test("A favorite Nostr rebind retires only the old pairwise peer")
+    @Test("A favorite Nostr rebind retires the old peer for either bootstrap role", arguments: [false, true])
     @MainActor
-    func favoriteIdentityRebindRetiresOldPeerBeforeNewInvite() throws {
+    func favoriteIdentityRebindRetiresOldPeerBeforeBootstrap(localInitiates: Bool) throws {
         let relay = FakeRelayManager()
         let storage = try makeTempDir(label: "favorite-rebind-local")
         let service = NdrNostrService(
@@ -570,13 +582,17 @@ struct NdrOutOfBandTransportTests {
             rolloutEnabled: true,
             storageDirectoryProvider: { storage }
         )
-        let (viewModel, transport, favoritesService) =
-            makeViewModel(ndrService: service)
-        let local = try #require(
-            try viewModel.idBridge.getCurrentNostrIdentity()
+        let local = try NostrIdentity(
+            privateKeyData: Data(repeating: 0, count: 31) + Data([localInitiates ? 1 : 2])
+        )
+        let newPeer = try NostrIdentity(
+            privateKeyData: Data(repeating: 0, count: 31) + Data([localInitiates ? 2 : 1])
+        )
+        #expect((local.publicKeyHex < newPeer.publicKeyHex) == localInitiates)
+        let (viewModel, transport, favoritesService) = makeViewModel(
+            ndrService: service, nostrKeychain: try identityKeychain(local)
         )
         let oldPeer = try NostrIdentity.generate()
-        let newPeer = try NostrIdentity.generate()
         let oldPeerRelay = FakeRelayManager()
         let oldPeerService = try makeService(
             label: "favorite-rebind-old-peer",
@@ -632,7 +648,7 @@ struct NdrOutOfBandTransportTests {
         )
         #expect(!service.hasPairwiseSession(with: oldPeer.publicKeyHex))
         #expect(favoritesService.isNdrRequired(for: noiseKey))
-        #expect(transport.sentNdrEvents.count == 1)
+        #expect(transport.sentNdrEvents.count == (localInitiates ? 1 : 0))
     }
 
     @Test("A failed durable favorite commit stays journaled after native retirement")
@@ -1032,7 +1048,8 @@ struct NdrOutOfBandTransportTests {
             accessible: nil
         )
         let favoritesService = FavoritesPersistenceService(
-            keychain: MockKeychain()
+            keychain: MockKeychain(),
+            ndrRolloutEnabled: false
         )
         let firstNoiseKey = Data((65..<97).map(UInt8.init))
         let secondNoiseKey = Data((97..<129).map(UInt8.init))
@@ -1246,7 +1263,8 @@ struct NdrOutOfBandTransportTests {
     func favoriteRebindRejectsMalformedOldOrNewIdentity() throws {
         let service = try makeService(label: "favorite-malformed-rebind")
         let favoritesService = FavoritesPersistenceService(
-            keychain: MockKeychain()
+            keychain: MockKeychain(),
+            ndrRolloutEnabled: false
         )
         let malformedOldNoiseKey = Data(repeating: 0xc1, count: 32)
         // Model malformed legacy data loaded before assignment authorization.
@@ -1303,6 +1321,98 @@ struct NdrOutOfBandTransportTests {
         _ = viewModel
     }
 
+    @Test("Crossed invitations recover lost responses and converge", arguments: [false, true])
+    @MainActor
+    func simultaneousBootstrapRecoversLostResponse(reverseRetryOrder: Bool) async throws {
+        let identities = [try NostrIdentity.generate(), try NostrIdentity.generate()]
+        let relays = [FakeRelayManager(), FakeRelayManager()]
+        let schedulers = [FakeNdrRetryScheduler(), FakeNdrRetryScheduler()]
+        let storage = [try makeTempDir(label: "crossed-first"), try makeTempDir(label: "crossed-second")]
+        defer { for directory in storage { try? FileManager.default.removeItem(at: directory) } }
+        let services = (0..<2).map { index in
+            NdrNostrService(
+                relayManager: relays[index], rolloutEnabled: true,
+                storageDirectoryProvider: { storage[index] },
+                retryScheduler: schedulers[index].schedule
+            )
+        }
+        let hosts = try (0..<2).map { index in
+            makeViewModel(ndrService: services[index], nostrKeychain: try identityKeychain(identities[index]))
+        }
+        let noiseKeys = [Data(repeating: 0x11, count: 32), Data(repeating: 0x22, count: 32)]
+        let peers = noiseKeys.map { PeerID(publicKey: $0) }
+        defer {
+            for index in 0..<2 { removeFavorite(in: hosts[index].2, noiseKey: noiseKeys[1 - index]) }
+        }
+        for index in 0..<2 {
+            let remote = 1 - index
+            installMutualFavorite(in: hosts[index].2, noiseKey: noiseKeys[remote], nostrIdentity: identities[remote])
+            hosts[index].1.authenticatedPeerTransportStates[peers[remote]] = AuthenticatedPeerTransportState(
+                capabilities: [.doubleRatchet], sessionGeneration: UUID(), noisePublicKey: noiseKeys[remote]
+            )
+            hosts[index].1.ndrSendResults = Array(repeating: true, count: 16)
+            hosts[index].0.bootstrapDoubleRatchetIfNeeded(for: peers[remote])
+            #expect(hosts[index].1.sentNdrEvents.count == 1, "Either identity can initiate independently")
+        }
+        let invites = try hosts.map { try #require($0.1.sentNdrEvents.first?.eventJson) }
+        for index in 0..<2 {
+            hosts[index].0.handleNdrEventPayload(from: peers[1 - index], payload: Data(invites[1 - index].utf8))
+        }
+        let responses = try hosts.map { try #require($0.1.sentNdrEvents.last?.eventJson) }
+        for index in 0..<2 {
+            #expect(try extractNostrKind(json: responses[index]) == 1059)
+            let completed = await TestHelpers.waitUntil(
+                { hosts[index].1.completedNdrSendCount == 2 && !schedulers[index].scheduled.isEmpty },
+                timeout: TestConstants.settleTimeout
+            )
+            #expect(completed)
+            #expect(services[index].hasPairwiseSession(with: identities[1 - index].publicKeyHex))
+            // Both responses were admitted by BLE but lost. Both local acceptor
+            // sessions exist; a repeated bootstrap notification must not cancel retries.
+            hosts[index].0.bootstrapDoubleRatchetIfNeeded(for: peers[1 - index])
+        }
+        for index in reverseRetryOrder ? [1, 0] : [0, 1] {
+            schedulers[index].runNext()
+            #expect(hosts[index].1.sentNdrEvents.count == 3, "Local session existence cannot stop recovery")
+            #expect(hosts[index].1.sentNdrEvents.last?.eventJson == invites[index])
+            hosts[1 - index].0.handleNdrEventPayload(from: peers[index], payload: Data(invites[index].utf8))
+            #expect(hosts[1 - index].1.sentNdrEvents.last?.eventJson == responses[1 - index],
+                    "Repeating an invite replays the exact native response")
+        }
+        for index in 0..<2 {
+            hosts[index].0.handleNdrEventPayload(from: peers[1 - index], payload: Data(responses[1 - index].utf8))
+        }
+        // Deliver both bootstraps; native arbitration discards the losing session.
+        for index in 0..<2 {
+            for event in relays[index].sentEvents where event.kind == 1060 {
+                services[1 - index].processInboundRelayEvent(event)
+            }
+        }
+        var messages = [[String](), [String]()]
+        for index in 0..<2 {
+            #expect(services[index].hasActiveSession(with: identities[1 - index].publicKeyHex))
+            services[index].onDecryptedMessage = { message, complete in
+                messages[index].append(message.event.content)
+                complete(.consumed)
+            }
+        }
+        for index in 0..<2 {
+            relays[index].resetSentEvents()
+            guard case .sent = services[index].send("crossed-invite-\(index)", to: identities[1 - index].publicKeyHex) else {
+                Issue.record("Peer could not send after crossed-invite recovery")
+                return
+            }
+            let envelopes = relays[index].sentEvents.filter { $0.kind == 1060 }
+            #expect(envelopes.count == 1, "Only the converged session sends a ciphertext")
+            for event in envelopes {
+                services[1 - index].processInboundRelayEvent(event)
+                services[1 - index].processInboundRelayEvent(event)
+            }
+        }
+        #expect(messages[0] == ["crossed-invite-1"])
+        #expect(messages[1] == ["crossed-invite-0"])
+    }
+
     @Test("Unanswered invites retry within one bounded authenticated attempt", arguments: [false, true], [false, true])
     @MainActor
     func unansweredInviteRetriesWithCurrentAuthenticatedBinding(
@@ -1318,9 +1428,11 @@ struct NdrOutOfBandTransportTests {
             storageDirectoryProvider: { storage },
             retryScheduler: retryScheduler.schedule
         )
-        let (viewModel, transport, favoritesService) =
-            makeViewModel(ndrService: service)
-        let remote = try NostrIdentity.generate()
+        let local = try NostrIdentity(privateKeyData: Data(repeating: 0, count: 31) + Data([1]))
+        let remote = try NostrIdentity(privateKeyData: Data(repeating: 0, count: 31) + Data([2]))
+        let (viewModel, transport, favoritesService) = makeViewModel(
+            ndrService: service, nostrKeychain: try identityKeychain(local)
+        )
         let noiseKey = try #require(
             Data(hexString: remote.publicKeyHex)
         )
@@ -2259,7 +2371,8 @@ struct NdrOutOfBandTransportTests {
             accessible: nil
         )
         let favoritesService = FavoritesPersistenceService(
-            keychain: MockKeychain()
+            keychain: MockKeychain(),
+            ndrRolloutEnabled: false
         )
         let noiseKey = Data(repeating: 0xd4, count: 32)
         installMutualFavorite(
@@ -3007,6 +3120,15 @@ struct NdrOutOfBandTransportTests {
             sessionMarkerStore:
                 sessionMarkerStore ?? InMemoryNdrSessionMarkerStore()
         )
+    }
+
+    private func identityKeychain(_ identity: NostrIdentity) throws -> MockKeychain {
+        let keychain = MockKeychain()
+        keychain.save(
+            key: "nostr-current-identity", data: try JSONEncoder().encode(identity),
+            service: "chat.bitchat.nostr", accessible: nil
+        )
+        return keychain
     }
 
     @MainActor
