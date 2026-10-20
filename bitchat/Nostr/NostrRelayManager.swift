@@ -923,7 +923,7 @@ final class NostrRelayManager: ObservableObject {
         for rawURL in urls {
             guard let url = NostrRelayURL.normalized(rawURL) else { continue }
             #if DEBUG && BITCHAT_INTEROP_LAB
-            guard url == "ws://127.0.0.1:18762" else { continue }
+            guard Self.builtInRelays.contains(url) else { continue }
             #endif
             if !allowDefaultRelays && defaultRelaySet.contains(url) { continue }
             if seen.insert(url).inserted {
@@ -1227,7 +1227,7 @@ final class NostrRelayManager: ObservableObject {
     
     private func connectToRelay(_ urlString: String) {
         #if DEBUG && BITCHAT_INTEROP_LAB
-        guard urlString == "ws://127.0.0.1:18762" else { return }
+        guard Self.builtInRelays.contains(urlString) else { return }
         #endif
         // Global network policy gate
         guard dependencies.activationAllowed() else { return }
