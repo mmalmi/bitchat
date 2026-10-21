@@ -105,6 +105,7 @@ private extension NostrRelayManagerDependencies {
     @MainActor
     static func live() -> Self {
         #if DEBUG && BITCHAT_INTEROP_LAB
+        TorURLSession.shared.setProxyMode(useTor: false)
         return Self(
             activationAllowed: { true }, userTorEnabled: { false },
             hasMutualFavorites: { true }, hasLocationPermission: { false },
