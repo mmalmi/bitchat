@@ -26,7 +26,7 @@ jobs:
           tar -xf "$RUNNER_TEMP/ndr-ffi/ndr-ffi-apple.tar" -C localPackages/NdrFfi
           test "$(shasum -a 256 localPackages/NdrFfi/Sources/NdrFfi/NdrFfi.swift | cut -d ' ' -f 1)" = "$(cat localPackages/NdrFfi/SWIFT_BINDINGS_SHA256)"
       - name: Qualify crossed-invite recovery
-        run: swift test --filter NdrOutOfBandTransportTests/simultaneousBootstrapRecoversLostResponse
+        run: swift test --filter 'NdrOutOfBandTransportTests/(simultaneousBootstrapRecoversLostResponse|peerRetirementIsTargetedAndIdempotent)'
       - name: Build isolated unsigned iOS lab
         env:
           BITCHAT_LAB_BUILD_ROOT: ${{ runner.temp }}/ndr-interop-ios
