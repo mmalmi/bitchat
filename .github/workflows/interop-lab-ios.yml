@@ -20,8 +20,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$(cat localPackages/NdrFfi/SOURCE_REVISION)" = 6177add831597f2e66f34ade3717c6201852cbdf
-          gh run download 39397817899 --repo mmalmi/bitchat \
+          test "$(cat localPackages/NdrFfi/SOURCE_REVISION)" = 26006f4f1487117e486b35da4854987a7fde87f5
+          gh run download 39582382361 --repo mmalmi/bitchat \
             --name ndr-ffi-xcframework --dir "$RUNNER_TEMP/ndr-ffi"
           tar -xf "$RUNNER_TEMP/ndr-ffi/ndr-ffi-apple.tar" -C localPackages/NdrFfi
           test "$(shasum -a 256 localPackages/NdrFfi/Sources/NdrFfi/NdrFfi.swift | cut -d ' ' -f 1)" = "$(cat localPackages/NdrFfi/SWIFT_BINDINGS_SHA256)"
